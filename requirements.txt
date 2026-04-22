@@ -1,0 +1,16 @@
+# LangGraph 依赖包
+# 安装命令: pip install -r requirements.txt
+
+# LangGraph框架
+langgraph>=0.0.20
+
+# LangChain核心
+langchain>=0.1.0
+langchain-core>=0.1.0
+langchain-openai>=0.1.0
+
+# 智谱AI
+zhipuai>=1.0.0
+
+# 环境变量管理
+python-dotenv>=1.0.0
