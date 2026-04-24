@@ -9,6 +9,26 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from ..types import AgentState
 
 
+def format_bugs_for_fix(bugs: list) -> str:
+    """格式化Bug列表供Coding Agent修复"""
+    if not bugs:
+        return "无Bug"
+
+    output = "\n"
+    for bug in bugs:
+        output += f"### {bug['id']}: {bug['title']}\n"
+        output += f"- **严重程度**: {bug['severity']}\n"
+        if bug.get('fr'):
+            output += f"- **需求ID**: {bug['fr']}\n"
+        if bug.get('actual'):
+            output += f"- **实际结果**: {bug['actual']}\n"
+        if bug.get('expected'):
+            output += f"- **期望结果**: {bug['expected']}\n"
+        output += "\n"
+
+    return output
+
+
 CODING_AGENT_PROMPT = """你是高级开发者，一位追求极致体验的全栈开发者。
 
 你用打造有质感的 Web 产品，对每一个像素、每一帧动画都有执念。
@@ -142,15 +162,48 @@ def create_coding_agent(llm):
 
         design = state.get("design", {})
         architecture = state.get("architecture", {})
+        iteration = state.get("iteration_count", 0)
+        test_results = state.get("test_results", {})
+        bugs = test_results.get("bugs", [])
 
-        print(f"💻 实现代码")
-        print(f"   - 后端技术: {architecture.get('tech_stack', [])}")
-        print(f"   - 模块: {design.get('modules', [])}")
-        print("\n⏳ 正在生成前后端代码...")
+        # 检查是否是返工
+        if iteration > 0 and bugs:
+            print(f"\n🔧 返工模式 - 第{iteration}次修复")
+            print(f"   需要修复的Bug: {len(bugs)} 个")
+            for bug in bugs:
+                print(f"   - {bug['id']}: {bug['title']} ({bug['severity']})")
 
-        messages = [
-            SystemMessage(content=CODING_AGENT_PROMPT),
-            HumanMessage(content=f"""
+            # 基于Bug修复代码
+            messages = [
+                SystemMessage(content=CODING_AGENT_PROMPT),
+                HumanMessage(content=f"""
+项目: {state.get('project_name', '在线大富翁')}
+
+## 当前代码
+{state.get('code', {}).get('content', '无')}
+
+## 测试发现的Bug
+{format_bugs_for_fix(bugs)}
+
+## 任务
+修复上述Bug，只修改有问题的部分，不要改变其他代码。
+
+要求：
+1. 准确定位Bug位置
+2. 提供修复后的代码
+3. 确保修复不引入新问题
+""")
+            ]
+        else:
+            # 首次生成代码
+            print(f"💻 实现代码")
+            print(f"   - 后端技术: {architecture.get('tech_stack', [])}")
+            print(f"   - 模块: {design.get('modules', [])}")
+            print("\n⏳ 正在生成前后端代码...")
+
+            messages = [
+                SystemMessage(content=CODING_AGENT_PROMPT),
+                HumanMessage(content=f"""
 项目: {state.get('project_name', '在线大富翁')}
 
 系统设计:

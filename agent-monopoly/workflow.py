@@ -106,8 +106,37 @@ class AgentWorkflow:
         # Code Review → Testing
         workflow.add_edge("code_review_agent", "testing_agent")
 
-        # Testing → QA
-        workflow.add_edge("testing_agent", "qa_agent")
+        # Testing → QA 或 返工到 Coding
+        # 如果发现P0/P1 Bug，返回Coding Agent修复
+        def should_rework(state: AgentState) -> str:
+            """判断是否需要返工修复Bug"""
+            test_results = state.get("test_results", {})
+            bugs = test_results.get("bugs", [])
+            iteration = state.get("iteration_count", 0)
+
+            # 最多返工3次，防止无限循环
+            if iteration >= 3:
+                print(f"\n⚠️ 已达到最大返工次数({iteration}次)，强制继续到QA")
+                return "qa"
+
+            # 检查是否有P0或P1的严重Bug
+            for bug in bugs:
+                if bug.get("severity") in ["P0", "P1"]:
+                    print(f"\n🔧 发现严重Bug，返工到Coding Agent: {bug['id']}")
+                    state["iteration_count"] = iteration + 1
+                    return "rework_coding"
+
+            # 没有严重Bug，继续到QA
+            return "qa"
+
+        workflow.add_conditional_edges(
+            "testing_agent",
+            should_rework,
+            {
+                "rework_coding": "coding_agent",  # 返工修复
+                "qa": "qa_agent"                  # 继续到QA
+            }
+        )
 
         # QA → Documentation
         workflow.add_edge("qa_agent", "documentation_agent")
