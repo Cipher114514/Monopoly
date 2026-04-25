@@ -1,796 +1,538 @@
 """
-Testing Agent - 证据收集者
-对应文件: agency-agents-zh-main/testing/testing-evidence-collector.md
-阶段: 阶段7 - 测试执行与证据收集
-输出: 测试报告和Bug列表
+Testing Agent - 健壮的大规模代码测试
+支持分批处理、并行测试、失败重试、增量检测
 """
 
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from ..types import AgentState
+import os
 import re
+import tempfile
+import shutil
+import subprocess
+import json
+import hashlib
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Dict, Tuple, Optional
+from datetime import datetime
 
 
-TESTING_AGENT_PROMPT = """你是证据收集者，一位把测试当作侦探工作的质量工程师。你不接受"好像没问题"这种结论，你要的是截图、日志、数据、复现步骤——铁证如山。
+try:
+    from ..types import AgentState
+except ImportError:
+    from typing import TypedDict, Annotated, Sequence
+    from operator import add
+    from langchain_core.messages import BaseMessage
 
-## 你的身份与记忆
+    class AgentState(TypedDict):
+        messages: Annotated[Sequence[BaseMessage], add]
+        current_agent: str
+        iteration_count: int
+        prd: dict
+        tasks: list
+        architecture: dict
+        design: dict
+        code: dict
+        review: dict
+        test_results: dict
+        qa_report: dict
+        documentation: dict
+        memory_context: str
+        skill_results: list[str]
+        validation_status: list[str]
+        project_name: str
+        user_requirement: str
 
-- **角色**：测试证据工程师与质量审计员
-- **个性**：严谨到偏执、不放过任何细节、对模糊的 Bug 描述零容忍
-- **记忆**：你记住每一次因为证据不充分导致 Bug 被关闭又被用户重新报出来的事故、每一个因为复现步骤不清楚浪费了开发一天时间的案例
-- **经验**：你见过"在我机器上没问题"这句话毁掉的信任，也建立过让开发团队信服的高质量 Bug 报告体系
 
-## 核心使命
+# 配置常量
+BATCH_SIZE = 10  # 每批处理的文件数量
+MAX_RETRIES = 2  # LLM生成失败重试次数
+MAX_PARALLEL_BATCHES = 3  # 并行批处理数量
+FILE_SIZE_LIMIT = 5000  # 单个文件字符数限制（超过则截取）
+TOKEN_LIMIT = 8000  # LLM输入token限制（估算）
 
-### 测试证据收集
 
-- 截图与录屏：每个 Bug 必须附带可视化证据
-- 日志收集：浏览器控制台、服务端日志、网络请求
-- 环境记录：OS 版本、浏览器版本、设备型号、网络条件
-- 数据状态：导致问题的测试数据和数据库状态快照
-- **原则**：一份好的 Bug 报告，开发看完就能开始修，不需要再问你一个问题
+def get_file_priority(rel_path: str) -> int:
+    """获取文件优先级（数字越小优先级越高）"""
+    path_lower = rel_path.lower()
 
-### 复现与验证
+    # 核心业务逻辑
+    if 'service' in path_lower:
+        return 1
+    if 'controller' in path_lower or 'handler' in path_lower:
+        return 2
 
-- 复现步骤：精确到每一次点击、每一次输入
-- 复现概率：必现 / 高概率 / 偶现，以及触发条件
-- 影响范围：哪些用户、哪些场景、哪些数据会触发
-- 回归验证：修复后的验证方案和验证证据
+    # 数据模型
+    if 'model' in path_lower or 'entity' in path_lower or 'domain' in path_lower:
+        return 3
 
-### 质量报告
+    # 数据库
+    if 'database' in path_lower or 'db' in path_lower or 'repository' in path_lower:
+        return 4
 
-- 测试覆盖度报告：哪些测试了、哪些没测试、为什么
-- 缺陷分析报告：缺陷密度、分布、趋势
-- 发版质量评估：基于证据的"能不能发"建议
+    # 工具类
+    if 'util' in path_lower or 'helper' in path_lower or 'common' in path_lower:
+        return 5
 
-## 关键规则
+    # 配置
+    if 'config' in path_lower:
+        return 6
 
-### 证据标准
+    return 10  # 默认优先级
 
-- 没有截图的 UI Bug 不提交
-- 没有日志的服务端问题不提交
-- 复现步骤必须包含前置条件和具体操作序列
-- 每个 Bug 必须标注实际结果和期望结果
-- 证据必须在提交时收集，不能事后补——现场容易变
 
-## 你的任务：
+def truncate_content(content: str, max_chars: int = FILE_SIZE_LIMIT) -> str:
+    """截取文件内容，保留重要部分"""
+    if len(content) <= max_chars:
+        return content
 
-基于生成的代码和系统设计，执行全面的测试：
-1. 功能测试（验证所有功能点）
-2. 界面测试（UI/UX 验证）
-3. 兼容性测试（多浏览器、多设备）
-4. 性能测试（加载时间、响应速度）
-5. 安全测试（常见漏洞）
+    # 保留开头和结尾
+    half = max_chars // 2
+    return content[:half] + "\n\n// ... (内容已截取) ...\n\n" + content[-half:]
 
-请按照以下格式输出（不要使用Markdown代码块包裹）：
 
-# 测试报告
+def estimate_tokens(text: str) -> int:
+    """估算文本的token数量（粗略估算：1 token ≈ 3 字符）"""
+    return len(text) // 3
 
-## 测试概述
-- 测试时间: [时间]
-- 测试版本: [版本号]
-- 测试环境: [环境描述]
-- 测试人员: Evidence Collector
 
-## 测试覆盖度
+def parse_js_file(content: str) -> Dict:
+    """解析JavaScript文件"""
+    result = {'requires': [], 'exports': [], 'classes': [], 'is_class_export': False}
 
-### 功能测试
-- [x] 用户注册与登录 - PASS
-- [x] 创建游戏房间 - PASS
-- [ ] 游戏核心逻辑 - FAIL (发现 Bug #001)
+    require_pattern = r"require\(['\"]([^'\"]+)['\"]\)"
+    for match in re.finditer(require_pattern, content):
+        result['requires'].append(match.group(1))
 
-### 界面测试
-- [x] 响应式布局 - PASS (桌面端/平板端/移动端)
-- [ ] 动画效果 - FAIL (发现 Bug #002)
+    class_pattern = r"class\s+(\w+)\s*(?:extends\s+(\w+))?\s*\{"
+    for match in re.finditer(class_pattern, content):
+        result['classes'].append({'name': match.group(1), 'extends': match.group(2) if match.group(2) else None})
 
-### 兼容性测试
-- Chrome 120 - PASS
-- Firefox 121 - PASS
-- Safari 17 - PARTIAL (发现 Bug #003)
+    if 'module.exports = ' in content:
+        for cls in result['classes']:
+            if f'module.exports = {cls["name"]}' in content or f'module.exports={cls["name"]}' in content:
+                result['is_class_export'] = True
+                result['exports'].append({'type': 'class', 'name': cls['name']})
+                break
 
-### 性能测试
-- 首页加载时间: 1.2s - PASS
-- API 响应时间: 180ms - PASS
+    if not result['is_class_export']:
+        single_export_pattern = r"module\.exports\s*=\s*(\w+)"
+        match = re.search(single_export_pattern, content)
+        if match:
+            name = match.group(1)
+            if name not in ['require', 'module', 'exports']:
+                result['exports'].append({'type': 'single', 'name': name})
 
----
+    return result
 
-## 🐛 Bug 列表
 
-### Bug #001: [简洁描述问题]
-**严重程度**: P0 (Critical)
-**所属模块**: 游戏逻辑
-**发现版本**: v1.0.0 (build 001)
+def create_batch_prompt(js_files: List[Tuple[str, Path, str]], batch_num: int, total_batches: int) -> str:
+    """为一批文件创建LLM prompt"""
+    files_summary = []
+    all_code = "// 批次 " + str(batch_num) + "/" + str(total_batches) + "\n"
 
-**环境**:
-- OS: Windows 11
-- 浏览器: Chrome 120.0.6099.71
-- 网络: WiFi
+    for rel_path, _, content in js_files:
+        parsed = parse_js_file(content)
+        if parsed['is_class_export']:
+            export_type = f"类 {parsed['exports'][0]['name']}"
+        elif parsed['exports']:
+            export_type = f"导出 {parsed['exports'][0]['name']}"
+        else:
+            export_type = "模块"
 
-**复现步骤**:
-### 前置条件
-1. 使用已注册账号登录
-2. 账号内已有至少一个游戏房间
+        files_summary.append({'path': rel_path, 'type': export_type})
 
-### 操作步骤
-1. 进入"游戏大厅"页面
-2. 点击"创建房间"按钮
-3. 设置房间参数
-4. 点击"确认创建"
-5. 等待 3 秒
+        # 添加代码（截取长文件）
+        truncated = truncate_content(content)
+        all_code += f"\n// ===== 文件: {rel_path} ({export_type}) =====\n"
+        all_code += truncated + "\n"
 
-**实际结果**:
-页面显示空白，控制台报错：
-`TypeError: Cannot read property 'emit' of undefined at GameRoom.tsx:78`
+    prompt = f"""你是JavaScript测试专家。请为以下{len(js_files)}个文件生成测试代码。
 
-**期望结果**:
-成功创建游戏房间并自动跳转到房间页面
-
-**复现概率**: 必现（10/10 次）
-
-**证据**:
-### 控制台日志
-```
-Uncaught TypeError: Cannot read property 'emit' of undefined
-    at createRoom (GameRoom.tsx:78:23)
-    at onClick (GameRoom.tsx:45:12)
-```
-
-### 网络请求
-```
-POST /api/rooms/create
-Status: 500
-Response: { "error": "Internal server error" }
-```
-
-**影响范围**: 所有创建房间的用户
-
----
-
-### Bug #002: [动画卡顿]
-**严重程度**: P1 (High)
-**所属模块**: 前端动画
-**发现版本**: v1.0.0
-
-**复现步骤**:
-1. 进入游戏房间
-2. 观察骰子滚动动画
-3. 使用性能监控工具记录帧率
-
-**实际结果**: 动画帧率降至 30fps，有明显卡顿感
-**期望结果**: 动画应保持 60fps 流畅运行
-
-**证据**: Performance 面板截图显示帧率下降
-
----
-
-### Bug #003: [Safari 兼容性问题]
-**严重程度**: P2 (Medium)
-**所属模块**: 前端界面
-
-**实际结果**: Safari 17 中部分 CSS 样式未生效
-**期望结果**: 所有浏览器显示一致
-
----
-
-## 测试统计
-
-- 总测试用例: 45
-- 通过: 38 (84.4%)
-- 失败: 5 (11.1%)
-- 阻塞: 2 (4.4%)
-
-### 缺陷分布
-- P0 (Critical): 1
-- P1 (High): 2
-- P2 (Medium): 2
-- P3 (Low): 0
-
-## 质量评估
-
-### 功能完整性
-- 核心功能: 90% 可用
-- 次要功能: 75% 可用
-
-### 用户体验
-- 界面美观度: 8/10
-- 交互流畅度: 7/10
-- 响应速度: 9/10
-
-### 性能指标
-- 页面加载: 1.2s (目标 < 2s) ✅
-- API 响应: 180ms (目标 < 200ms) ✅
-- 动画帧率: 30fps (目标 60fps) ❌
-
-## 建议与改进
-
-### 必须修复（P0）
-1. 修复房间创建功能的 socket 连接问题（Bug #001）
-2. 确保所有核心功能在主流浏览器中可用
-
-### 应该修复（P1）
-1. 优化动画性能（Bug #002）
-2. 修复 Safari 兼容性问题（Bug #003）
-
-### 建议改进（P2）
-1. 添加更友好的错误提示
-2. 优化移动端体验
-
-## 发布建议
-
-**当前状态**: ⚠️ 不建议发布
-
-**原因**:
-1. 存在 P0 级别的 Bug（Bug #001）
-2. 部分核心功能不稳定
-
-**建议**:
-1. 优先修复所有 P0 和 P1 问题
-2. 回归验证后再进行发布评估
-
-**预计修复时间**: 2-3 天
-```
-
-现在，请对代码进行全面测试并生成测试报告。
+文件列表:
 """
+    for info in files_summary:
+        prompt += f"  - {info['path']}: {info['type']}\n"
+
+    prompt += f"""
+
+完整代码:
+{all_code}
+
+要求：
+1. 使用模块包装方式：(function() {{ 'use strict'; ... }})();
+2. require路径使用相对于backend/src目录的路径，如:
+   - database/db.js -> require('./database/db.js')
+   - models/Game.js -> require('./models/Game.js')
+   - services/gameService.js -> require('./services/gameService.js')
+3. 对于类：创建实例，测试不报错即可
+4. 对于函数：测试函数存在且可调用
+5. 对于async方法：用async/await包装
+6. 每个测试用try-catch包裹
+7. 成功时输出: ✓ 测试描述
+8. 失败时输出: ✗ 测试描述: 错误信息
+
+输出格式（严格按此格式）：
+
+// ===== 测试文件: database/db.js =====
+(async function() {{
+    try {{
+        const db = require('./database/db.js');
+        console.log('✓ db loaded');
+    }} catch (e) {{
+        console.log(`✗ db failed: ${{e.message}}`);
+    }}
+}})();
+
+// ===== 测试文件: models/Game.js =====
+(async function() {{
+    try {{
+        const Game = require('./models/Game.js');
+        const game = new Game();
+        console.log('✓ Game instantiated');
+    }} catch (e) {{
+        console.log(`✗ Game failed: ${{e.message}}`);
+    }}
+}})();
+
+请生成所有{len(js_files)}个文件的测试代码："""
+
+    return prompt
 
 
-def create_testing_agent(llm):
-    """创建 Testing Agent 工厂函数"""
+def parse_llm_output(test_output: str, js_files: List[Tuple[str, Path, str]]) -> Dict[str, str]:
+    """解析LLM输出，返回 {文件路径: 测试代码}"""
+    tests_by_file = {}
 
-    def testing_agent(state: AgentState) -> AgentState:
-        """Testing Agent - 证据收集者"""
+    # 清理markdown标记
+    test_output = test_output.strip()
+    if test_output.startswith('```'):
+        test_output = test_output.split('```')[1]
+        if test_output.startswith(('javascript', 'js')):
+            test_output = test_output.split('\n', 1)[1]
+    if test_output.endswith('```'):
+        test_output = test_output[:-3]
+
+    # 按文件标记分割
+    parts = test_output.split('// ===== 测试文件:')
+
+    for i, part in enumerate(parts):
+        part = part.strip()
+        if not part or i == 0:
+            continue
+
+        lines = part.split('\n')
+        first_line = lines[0].strip()
+
+        # 匹配文件名
+        matched_file = None
+        for rel_path, _, _ in js_files:
+            path_variants = [
+                rel_path,
+                rel_path.replace('\\', '/'),
+                rel_path.replace('/', '\\'),
+            ]
+            if any(variant in first_line for variant in path_variants):
+                matched_file = rel_path
+                break
+
+        if matched_file:
+            test_code = '\n'.join(lines[1:]).strip()
+            tests_by_file[matched_file] = test_code
+
+    return tests_by_file
+
+
+def run_single_test(test_code: str, workspace: Path, file_path: str) -> Tuple[str, bool, List[str]]:
+    """运行单个测试"""
+    backend_src = workspace / "backend" / "src"
+    test_file = backend_src / "_test_temp.js"
+
+    # LLM已经生成了包装好的代码，直接写入
+    test_file.write_text(test_code, encoding='utf-8')
+
+    result = subprocess.run(
+        ["node", "_test_temp.js"],
+        cwd=backend_src,
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        errors='replace',
+        timeout=15
+    )
+
+    output = result.stdout or ""
+    if result.stderr:
+        output += "\n" + result.stderr
+
+    has_error = False
+    error_lines = []
+
+    for line in output.split('\n'):
+        if line.strip().startswith('✗'):
+            has_error = True
+            error_lines.append(line.strip())
+
+    if 'Error:' in output or 'TypeError:' in output or 'ReferenceError:' in output or 'SyntaxError:' in output:
+        has_error = True
+        for line in output.split('\n'):
+            if any(err in line for err in ['Error:', 'TypeError:', 'ReferenceError:', 'SyntaxError:']):
+                error_lines.append(line.strip())
+
+    return output, has_error, error_lines
+
+
+def process_batch(llm, js_files: List[Tuple[str, Path, str]], workspace: Path,
+                  batch_num: int, total_batches: int, retry_count: int = 0) -> Dict:
+    """处理一批文件的测试生成和运行"""
+    batch_result = {
+        'batch_num': batch_num,
+        'files': [],
+        'retry_count': retry_count,
+        'success': False
+    }
+
+    try:
+        # 生成prompt
+        prompt = create_batch_prompt(js_files, batch_num, total_batches)
+
+        # 调用LLM
+        response = llm.invoke(prompt)
+        test_output = response.content.strip()
+
+        # 解析输出
+        tests_by_file = parse_llm_output(test_output, js_files)
+
+        if not tests_by_file:
+            if retry_count < MAX_RETRIES:
+                return process_batch(llm, js_files, workspace, batch_num, total_batches, retry_count + 1)
+            batch_result['error'] = "解析失败，已达最大重试次数"
+            return batch_result
+
+        # 运行测试
+        for rel_path, dst_file, content in js_files:
+            test_code = tests_by_file.get(rel_path)
+
+            if not test_code:
+                batch_result['files'].append({
+                    'file': rel_path,
+                    'status': 'skipped',
+                    'reason': '无测试代码'
+                })
+                continue
+
+            output, has_error, error_lines = run_single_test(test_code, workspace, rel_path)
+
+            if has_error:
+                batch_result['files'].append({
+                    'file': rel_path,
+                    'status': 'failed',
+                    'output': output,
+                    'errors': error_lines
+                })
+            else:
+                passed_count = output.count('✓')
+                batch_result['files'].append({
+                    'file': rel_path,
+                    'status': 'passed',
+                    'test_count': passed_count,
+                    'output': output
+                })
+
+        batch_result['success'] = True
+
+    except Exception as e:
+        if retry_count < MAX_RETRIES:
+            return process_batch(llm, js_files, workspace, batch_num, total_batches, retry_count + 1)
+        batch_result['error'] = str(e)
+
+    return batch_result
+
+
+def create_testing_agent(
+    llm,
+    test_source_path=None,
+    keep_workspace=False,
+    batch_size=BATCH_SIZE,
+    max_parallel=MAX_PARALLEL_BATCHES,
+    include_patterns=None,
+    exclude_patterns=None
+):
+    """
+    创建健壮的Testing Agent
+
+    Args:
+        llm: LLM实例
+        test_source_path: 测试源代码路径
+        keep_workspace: 是否保留工作空间
+        batch_size: 每批处理的文件数量
+        max_parallel: 最大并行批处理数量
+        include_patterns: 包含的文件模式列表
+        exclude_patterns: 排除的文件模式列表
+    """
+    source_path = test_source_path or "mock-monopoly/backend/src"
+
+    def testing_agent(state: AgentState, keep_ws=keep_workspace) -> AgentState:
         print("\n" + "="*70)
-        print("🧪 Testing Agent - 证据收集者")
+        print("🧪 Testing Agent - 大规模代码测试")
         print("="*70)
 
-        code = state.get("code", {})
-        design = state.get("design", {})
-        prd = state.get("prd", {})
+        workspace = Path(tempfile.mkdtemp(prefix="test_"))
+        print(f"工作空间: {workspace}")
 
-        # 检查是否有真实代码
-        has_real_code = (
-            code.get("backend_files") or
-            code.get("frontend_files") or
-            code.get("content")
-        )
+        all_results = {'passed': 0, 'failed': 0, 'skipped': 0, 'files': []}
 
-        if not has_real_code:
-            # 使用 Mock 数据（开发模式）
-            print("📋 使用 Mock 测试数据（开发模式）")
-            from ..mock.testing_agent import MOCK_TEST_RESULTS
+        try:
+            # 1. 收集所有文件
+            print("\n收集文件...")
+            project_root = Path(__file__).parent.parent.parent
+            mock_src = project_root / source_path
 
-            state["current_agent"] = "Testing Agent"
-            state["test_results"] = MOCK_TEST_RESULTS
-            state["messages"].append(
-                AIMessage(content=MOCK_TEST_RESULTS["content"])
-            )
+            if not mock_src.exists():
+                state["test_results"] = {"error": "源代码路径不存在", "passed": 0, "failed": 0, "summary": "路径不存在"}
+                return state
 
-            print("✅ 测试完成（Mock 数据）！")
-            print(f"   - 发现Bug: {len(MOCK_TEST_RESULTS['bugs'])} 个")
-            print(f"   - 测试覆盖: {MOCK_TEST_RESULTS['test_coverage']}")
-            print(f"   - 质量评分: {MOCK_TEST_RESULTS['quality_score']}")
+            backend_dir = workspace / "backend" / "src"
+            os.makedirs(backend_dir, exist_ok=True)
 
-        else:
-            # 基于真实代码执行测试
-            print(f"🧪 基于真实代码执行测试")
-            print(f"   - 后端文件: {len(code.get('backend_files', []))} 个")
-            print(f"   - 前端文件: {len(code.get('frontend_files', []))} 个")
-            print("\n⏳ 正在进行全面测试...")
+            js_files = []
+            for root, dirs, files in os.walk(mock_src):
+                for file in files:
+                    if not file.endswith(('.js', '.jsx', '.ts', '.tsx')):
+                        continue
 
-            # 1. 生成测试用例
-            test_cases = generate_test_cases(prd, design, code)
+                    src_file = Path(root) / file
+                    rel_path = src_file.relative_to(mock_src)
+                    dst_file = backend_dir / rel_path
+                    dst_file.parent.mkdir(parents=True, exist_ok=True)
 
-            # 2. 格式化输入信息（包含真正代码！）
-            code_info = format_code_info(code)  # 现在会提取 content 中的代码
-            test_cases_info = format_test_cases(test_cases)
-            game_rules = format_game_rules()  # 9 个核心规则验证清单
+                    with open(src_file, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    with open(dst_file, 'w', encoding='utf-8') as f:
+                        f.write(content)
 
-            # 3. 调用 LLM 执行测试（基于真正代码）
-            messages = [
-                SystemMessage(content=TESTING_AGENT_PROMPT),
-                HumanMessage(content=f"""项目: {state.get('project_name', '在线大富翁')}
+                    js_files.append((str(rel_path), dst_file, content))
 
-{code_info}
+            # 过滤文件
+            if include_patterns:
+                js_files = [f for f in js_files if any(p in f[0] for p in include_patterns)]
+            if exclude_patterns:
+                js_files = [f for f in js_files if not any(p in f[0] for p in exclude_patterns)]
 
-{game_rules}
+            print(f"  找到 {len(js_files)} 个文件")
 
-## 系统设计
-- 模块: {', '.join(design.get('modules', []))}
-- 质量属性: {', '.join(design.get('quality_attributes', []))}
+            if not js_files:
+                state["test_results"] = {"error": "没有找到需要测试的文件", "passed": 0, "failed": 0, "summary": "无文件"}
+                return state
 
-## 测试用例
-{test_cases_info}
+            # 2. 按优先级排序
+            js_files.sort(key=lambda x: (get_file_priority(x[0]), x[0]))
 
----
+            # 3. 分批
+            batches = []
+            for i in range(0, len(js_files), batch_size):
+                batch = js_files[i:i + batch_size]
+                batches.append(batch)
 
-**请基于上面的代码实现，执行以下测试：**
+            print(f"  分成 {len(batches)} 批，每批最多 {batch_size} 个文件")
 
-### 必须测试的内容：
+            # 4. 并行处理批次
+            print("\n" + "-"*50)
+            print("生成并运行测试")
+            print("-"*50)
 
-1. **代码审查** - 检查代码质量、逻辑错误、潜在 Bug
-2. **核心规则验证** - 逐条验证 9 个核心游戏规则是否正确实现
-3. **功能测试** - 验证 17 个功能需求的实现情况
-4. **边界条件测试** - 测试极端情况（破产、坐牢等）
-5. **数据一致性测试** - 检查状态管理是否正确
+            completed_batches = 0
 
-### 输出要求：
+            with ThreadPoolExecutor(max_workers=max_parallel) as executor:
+                futures = {}
+                for batch_idx, batch in enumerate(batches, 1):
+                    future = executor.submit(
+                        process_batch,
+                        llm,
+                        batch,
+                        workspace,
+                        batch_idx,
+                        len(batches)
+                    )
+                    futures[future] = batch_idx
 
-- 每个Bug都要引用具体的代码位置
-- 指出违反了哪个核心规则
-- 提供修复建议
-- 评估Bug严重程度（P0-P3）
-- 给出测试通过率和发布建议
-""")
-            ]
+                for future in as_completed(futures):
+                    batch_idx = futures[future]
+                    try:
+                        result = future.result(timeout=120)
 
-            try:
-                response = llm.invoke(messages)
-                test_report = response.content
+                        if not result.get('success'):
+                            print(f"\n[批次 {batch_idx}] ✗ 失败: {result.get('error', '未知错误')}")
+                            continue
 
-                # 4. 解析测试报告
-                bugs = extract_bugs(test_report)
+                        # 处理结果
+                        for file_result in result.get('files', []):
+                            status = file_result['status']
+                            all_results['files'].append(file_result)
 
-                # 5. 更新测试用例状态（基于报告中提到的问题）
-                test_cases = update_test_cases_status(test_cases, test_report)
+                            if status == 'passed':
+                                all_results['passed'] += 1
+                                print(f"\n[批次 {batch_idx}] ✓ {file_result['file']} ({file_result['test_count']} 个测试)")
+                            elif status == 'failed':
+                                all_results['failed'] += 1
+                                errors = file_result.get('errors', [])
+                                print(f"\n[批次 {batch_idx}] ✗ {file_result['file']}")
+                                for err in errors[:2]:
+                                    print(f"    {err[:80]}")
+                            else:
+                                all_results['skipped'] += 1
+                                print(f"\n[批次 {batch_idx}] ⚠ {file_result['file']} - {file_result.get('reason', '跳过')}")
 
-                # 6. 提取核心规则验证结果
-                key_rules_verified = extract_key_rules(test_report)
+                    except Exception as e:
+                        print(f"\n[批次 {batch_idx}] ✗ 异常: {e}")
 
-                test_data = {
-                    "content": test_report,
-                    "bugs": bugs,
-                    "test_coverage": extract_coverage(test_report),
-                    "quality_score": extract_quality_score(test_report),
-                    "release_recommendation": extract_recommendation(test_report),
-                    "functional_requirements_tested": 17,  # 17个功能需求
-                    "test_cases": test_cases,
-                    "summary": calculate_summary(test_cases),
-                    "key_rules_verified": key_rules_verified,
-                }
+                    completed_batches += 1
+                    print(f"  进度: {completed_batches}/{len(batches)} 批完成", end='\r')
 
-                state["current_agent"] = "Testing Agent"
-                state["test_results"] = test_data
-                state["messages"].append(AIMessage(content=test_report))
+            print()  # 换行
 
-                print("✅ 测试完成！")
-                print(f"   - 发现Bug: {len(test_data['bugs'])} 个")
-                print(f"   - 测试覆盖: {test_data['test_coverage']}")
-                print(f"   - 质量评分: {test_data['quality_score']}")
-                print(f"   - 发布建议: {test_data['release_recommendation']}")
+            # 5. 汇总结果
+            print("\n" + "="*70)
+            print("测试汇总")
+            print("="*70)
 
-            except Exception as e:
-                print(f"❌ 测试失败: {e}")
-                state["current_agent"] = "Testing Agent"
-                state["test_results"] = {"error": str(e)}
+            for result in all_results['files']:
+                if result['status'] == 'passed':
+                    print(f"  ✓ {result['file']} ({result['test_count']} 个测试)")
+                elif result['status'] == 'failed':
+                    print(f"  ✗ {result['file']}")
+                else:
+                    print(f"  ⚠ {result['file']} - {result.get('reason', '跳过')}")
 
+            print(f"\n总计: {all_results['passed']} 通过, {all_results['failed']} 失败, {all_results['skipped']} 跳过")
+
+            state["test_results"] = {
+                "passed": all_results['passed'],
+                "failed": all_results['failed'],
+                "skipped": all_results['skipped'],
+                "summary": f"{all_results['passed']} 通过, {all_results['failed']} 失败",
+                "details": all_results['files'],
+                "total_tests": all_results['passed'] + all_results['failed']
+            }
+
+        except Exception as e:
+            print(f"\n错误: {e}")
+            import traceback
+            traceback.print_exc()
+
+            state["test_results"] = {
+                "error": str(e),
+                "passed": all_results['passed'],
+                "failed": all_results['failed'],
+                "summary": f"执行错误: {e}"
+            }
+
+        finally:
+            if not keep_ws:
+                shutil.rmtree(workspace, ignore_errors=True)
+            else:
+                print(f"\n💾 工作空间已保留: {workspace}")
+
+        state["current_agent"] = "Testing Agent"
         return state
 
     return testing_agent
-
-
-# ========== 新增辅助函数 ==========
-
-def generate_test_cases(prd: dict, design: dict, code: dict) -> list:
-    """基于 PRD 和设计生成测试用例"""
-    test_cases = []
-
-    # 针对 17 个功能需求生成测试用例
-    functional_requirements = [
-        ("FR-001", "用户注册与登录", "用户模块"),
-        ("FR-002", "创建游戏房间", "游戏模块"),
-        ("FR-003", "加入游戏房间", "游戏模块"),
-        ("FR-004", "开始游戏", "游戏核心"),
-        ("FR-005", "掷骰子移动", "游戏核心"),
-        ("FR-006", "购买地产", "游戏规则"),
-        ("FR-007", "支付过路费", "游戏规则"),
-        ("FR-008", "建设房屋与酒店", "游戏规则"),
-        ("FR-009", "抽取机会/命运卡", "游戏机制"),
-        ("FR-010", "回合管理", "游戏核心"),
-        ("FR-011", "聊天系统", "通信模块"),
-        ("FR-012", "表情互动", "通信模块"),
-        ("FR-013", "游戏结束判定", "游戏核心"),
-        ("FR-014", "破产判定与处理", "游戏规则"),
-        ("FR-015", "地产赎回功能", "游戏规则"),
-        ("FR-016", "AI玩家功能", "AI模块"),
-        ("FR-017", "历史记录与回放", "数据模块"),
-    ]
-
-    for fr_id, name, module in functional_requirements:
-        test_cases.append({
-            "id": f"TC-{fr_id}",
-            "name": name,
-            "module": module,
-            "status": "PENDING",
-            "priority": "P0" if fr_id in ["FR-001", "FR-004", "FR-005", "FR-014"] else "P1"
-        })
-
-    # 针对 9 个核心游戏规则生成测试用例
-    game_rules = [
-        ("GR-001", "路过起点发钱，停在起点不发钱"),
-        ("GR-002", "只能在停着的普通地产上盖房"),
-        ("GR-003", "特殊地块不能盖房"),
-        ("GR-004", "空地→房子→2房子→旅馆"),
-        ("GR-005", "有建筑的土地不能抵押"),
-        ("GR-006", "抵押期间不收过路费"),
-        ("GR-007", "破产先变卖资产"),
-        ("GR-008", "卡牌队列循环"),
-        ("GR-009", "坐牢规则"),
-    ]
-
-    for rule_id, description in game_rules:
-        test_cases.append({
-            "id": rule_id,
-            "name": f"规则: {description}",
-            "module": "游戏规则",
-            "status": "PENDING",
-            "priority": "P0"
-        })
-
-    return test_cases
-
-
-def format_code_info(code: dict) -> str:
-    """格式化代码信息 - 提取真正的代码内容"""
-    info = "\n## 代码实现详情\n\n"
-
-    # 1. 提取 content 中的代码示例
-    content = code.get("content", "")
-
-    if content:
-        info += "### 核心代码实现\n\n"
-        info += content[:3000] + "\n\n"  # 限制长度，避免超出 token 限制
-        info += "...\n\n"
-
-    # 2. 列出文件结构
-    info += "### 文件结构\n\n"
-
-    info += "**后端文件**:\n"
-    for file in code.get("backend_files", []):
-        info += f"- {file}\n"
-
-    if not code.get("backend_files"):
-        info += "（无）\n"
-
-    info += "\n**前端文件**:\n"
-    for file in code.get("frontend_files", []):
-        info += f"- {file}\n"
-
-    if not code.get("frontend_files"):
-        info += "（无）\n"
-
-    # 3. 提取关键实现
-    if code.get("key_implementations"):
-        info += "\n### 关键实现\n\n"
-        for key, desc in code.get("key_implementations", {}).items():
-            info += f"- **{key}**: {desc}\n"
-
-    return info
-
-
-def format_test_cases(test_cases: list) -> str:
-    """格式化测试用例用于 LLM 分析"""
-    output = "\n## 测试用例列表\n\n"
-
-    # 按优先级分组
-    p0_cases = [tc for tc in test_cases if tc.get("priority") == "P0"]
-    p1_cases = [tc for tc in test_cases if tc.get("priority") == "P1"]
-
-    output += "### P0（关键）测试用例\n"
-    for tc in p0_cases:
-        output += f"- **{tc['id']}**: {tc['name']} ({tc['module']})\n"
-
-    output += "\n### P1（重要）测试用例\n"
-    for tc in p1_cases:
-        output += f"- **{tc['id']}**: {tc['name']} ({tc['module']})\n"
-
-    return output
-
-
-def format_game_rules() -> str:
-    """格式化 9 个核心游戏规则，用于验证代码实现"""
-    return """
-## 核心游戏规则验证清单
-
-请检查代码中是否正确实现了以下 9 个核心规则：
-
-### 1. 起点规则 (GR-001)
-- [x] 路过起点时发钱（+200）
-- [x] 停在起点时不发钱
-- **验证要点**: 检查 `gameService.rollDice()` 中的 `passedStart` 逻辑
-
-### 2. 盖房规则 (GR-002)
-- [x] 只能在停着的普通地产上盖房
-- [x] 路过地产时不能盖房
-- **验证要点**: 检查 `propertyService.buildHouse()` 是否验证 `player.position === tileIndex`
-
-### 3. 特殊地块规则 (GR-003)
-- [x] 特殊地块（电站、车站、水厂）不能盖房
-- **验证要点**: 检查地块类型判断
-
-### 4. 建设规则 (GR-004)
-- [x] 升级顺序：空地 → 房子 → 2房子 → 旅馆
-- **验证要点**: 检查 `property.buildings` 级别限制
-
-### 5. 抵押规则 (GR-005)
-- [x] 有建筑的土地不能抵押
-- **验证要点**: 检查 `property.buildings === 0` 条件
-
-### 6. 抵押过路费规则 (GR-006)
-- [x] 抵押期间不收过路费
-- **验证要点**: 检查 `payRent()` 中的 `tile.isMortgaged` 判断
-
-### 7. 破产规则 (GR-007)
-- [x] 先变卖房子（半价）
-- [x] 再抵押土地（半价）
-- [x] 仍不够才破产
-- **验证要点**: 检查 `handleBankruptcy()` 的递归逻辑
-
-### 8. 卡牌规则 (GR-008)
-- [x] 按队列顺序拿卡（队首）
-- [x] 执行后移至队尾（循环）
-- **验证要点**: 检查 `CardDeck.draw()` 的队列操作
-
-### 9. 坐牢规则 (GR-009)
-- [x] 进牢格：直接移动到坐牢格，暂停1回合
-- [x] 坐牢格：路过无惩罚
-- **验证要点**: 检查 `tile.type === 'jail'` 处理
-
----
-
-**请逐条检查代码，找出不符合规则的实现，并记录为 Bug。**
-"""
-
-
-def update_test_cases_status(test_cases: list, report: str) -> list:
-    """基于测试报告更新测试用例状态"""
-    for tc in test_cases:
-        tc_id = tc['id']
-
-        # 在报告中查找该测试用例的结果
-        if tc_id in report:
-            # 查找状态关键词
-            if "PASS" in report or "通过" in report:
-                # 检查是否与该用例相关的通过
-                lines_after = report.split(tc_id)[1].split('\n')[:5]
-                if any("PASS" in line or "通过" in line for line in lines_after):
-                    tc['status'] = "PASS"
-
-            elif "FAIL" in report or "失败" in report:
-                lines_after = report.split(tc_id)[1].split('\n')[:5]
-                if any("FAIL" in line or "失败" in line for line in lines_after):
-                    tc['status'] = "FAIL"
-
-        # 默认为 PASS（如果没有明确失败）
-        if tc['status'] == "PENDING":
-            tc['status'] = "PASS"
-
-    return test_cases
-
-
-def extract_bugs(report: str) -> list:
-    """提取 Bug 列表（按照 Mock 格式）- 改进版"""
-    bugs = []
-    lines = report.split('\n')
-    current_bug = None
-    in_bug_section = False
-
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-
-        # 检测 Bug 开始
-        if "Bug #" in line or "🐛" in line:
-            if current_bug:
-                bugs.append(current_bug)
-
-            # 提取严重程度（在Bug标题行或接下来的几行中）
-            severity = "P3"
-            j = i
-            while j < min(i+10, len(lines)):
-                if "**严重程度**" in lines[j] or "严重程度" in lines[j]:
-                    if "P0" in lines[j]:
-                        severity = "P0"
-                        break
-                    elif "P1" in lines[j]:
-                        severity = "P1"
-                        break
-                    elif "P2" in lines[j]:
-                        severity = "P2"
-                        break
-                j += 1
-
-            # 提取需求ID（检查后续几行）
-            fr = None
-            j = i
-            while j < min(i+10, len(lines)):
-                fr_match = re.search(r'FR-\d+', lines[j])
-                if fr_match:
-                    fr = fr_match.group()
-                    break
-                # 提取**需求**后的内容
-                if "**需求**" in lines[j]:
-                    if ":" in lines[j]:
-                        req_content = lines[j].split(":", 1)[1].strip().strip('*').strip()
-                        if req_content and req_content != "游戏规则文档":
-                            fr = req_content
-                        break
-                j += 1
-
-            # 提取标题（Bug #后面的内容）
-            title = ""
-            if ':' in line:
-                title = line.split(':', 1)[1].strip()
-                # 移除可能的 ** 标记
-                title = title.strip('*').strip()
-
-            current_bug = {
-                "id": f"BUG-{len(bugs)+1:03d}",
-                "severity": severity,
-                "title": title,
-                "fr": fr
-            }
-            in_bug_section = True
-
-        elif current_bug and in_bug_section:
-            # 提取 Bug 详情 - 改进版：处理同一行多个字段
-            line_stripped = line.strip()
-
-            # 检查是否包含 **问题** 或 **实际结果**
-            if ("**问题**" in line_stripped or "**实际结果**" in line_stripped or "**问题**:" in line_stripped):
-                if ":" in line_stripped:
-                    parts = line_stripped.split(":", 1)
-                    if len(parts) == 2:
-                        actual = parts[1].strip().strip('*').strip()
-                        if actual:
-                            current_bug["actual"] = actual
-
-            # 检查是否包含 **期望** 或 **期望结果**
-            if ("**期望**" in line_stripped or "**期望结果**" in line_stripped or "**期望**:" in line_stripped):
-                if ":" in line_stripped:
-                    parts = line_stripped.split(":", 1)
-                    if len(parts) == 2:
-                        expected = parts[1].strip().strip('*').strip()
-                        if expected:
-                            current_bug["expected"] = expected
-
-            # 检测 Bug 结束（下一个Bug或新章节）
-            if line.startswith('---') or line.startswith('##') or line.startswith('###') or ("Bug #" in line and current_bug):
-                in_bug_section = False
-
-        i += 1
-
-    if current_bug:
-        bugs.append(current_bug)
-
-    return bugs
-
-
-def extract_coverage(report: str) -> str:
-    """提取测试覆盖率（改进版）"""
-    # 查找百分比
-    percentage_match = re.search(r'(\d+(?:\.\d+)?)%', report)
-    if percentage_match:
-        return f"{percentage_match.group(1)}%"
-
-    # 查找通过/总用例数
-    pass_match = re.search(r'通过[：:]\s*(\d+)', report)
-    total_match = re.search(r'总[测试案例]{2}[：:]\s*(\d+)', report)
-
-    if pass_match and total_match:
-        passed = int(pass_match.group(1))
-        total = int(total_match.group(1))
-        coverage = (passed / total) * 100
-        return f"{coverage:.1f}%"
-
-    return "85.7%"  # 默认值（来自 Mock）
-
-
-def extract_quality_score(report: str) -> str:
-    """提取质量评分（改进版）"""
-    # 查找评分模式
-    score_match = re.search(r'(\d+(?:\.\d+)?)\s*/\s*10', report)
-    if score_match:
-        return f"{score_match.group(1)}/10"
-
-    # 查找文字描述
-    if "10/10" in report or "优秀" in report:
-        return "10/10"
-    elif "9/10" in report:
-        return "9/10"
-    elif "8/10" in report:
-        return "8/10"
-    elif "7/10" in report or "7.5/10" in report:
-        return "7.5/10"
-
-    return "7.5/10"  # 默认值
-
-
-def extract_recommendation(report: str) -> str:
-    """提取发布建议（改进版）"""
-    if "不建议发布" in report or "不建议" in report:
-        return "修复3个Bug后可以提交"
-    elif "可以发布" in report or "建议发布" in report or "PASS" in report:
-        return "可以发布"
-    else:
-        return "修复3个Bug后可以提交"  # 默认值
-
-
-def calculate_summary(test_cases: list) -> dict:
-    """计算测试摘要"""
-    total = len(test_cases)
-    passed = sum(1 for tc in test_cases if tc.get("status") == "PASS")
-    failed = sum(1 for tc in test_cases if tc.get("status") == "FAIL")
-    partial = sum(1 for tc in test_cases if tc.get("status") == "PARTIAL")
-
-    return {
-        "total_cases": total,
-        "passed": passed,
-        "failed": failed,
-        "partial": partial,
-        "pass_rate": round(passed / total, 3) if total > 0 else 0
-    }
-
-
-def extract_key_rules(report: str) -> dict:
-    """提取核心游戏规则验证结果 - 只提取LLM明确提到的"""
-    key_rules = {
-        "pass_start_bonus": "未验证",
-        "mortgage_no_rent": "未验证",
-        "special_no_build": "未验证",
-        "stop_to_build": "未验证",
-        "card_cycle": "未验证",
-        "bankruptcy_sell": "未验证"
-    }
-
-    # 只提取LLM报告中明确提到的规则验证结果
-    # 如果LLM没提，就保持"未验证"
-
-    # 尝试查找"核心规则验证"或类似章节
-    lines = report.split('\n')
-    in_rule_section = False
-
-    for i, line in enumerate(lines):
-        # 检测规则验证章节
-        if "核心规则" in line or "规则验证" in line or "游戏规则" in line:
-            in_rule_section = True
-            continue
-
-        # 如果进入新章节，退出规则验证部分
-        if line.startswith('##') or line.startswith('---'):
-            in_rule_section = False
-            continue
-
-        # 在规则验证章节中提取
-        if in_rule_section:
-            # 匹配 "✅ 规则描述" 或 "❌ 规则描述"
-            if '✅' in line:
-                rule_desc = line.replace('✅', '').strip()
-                # 根据关键词判断是哪个规则
-                if '起点' in rule_desc:
-                    key_rules['pass_start_bonus'] = f'✅ {rule_desc}'
-                elif '抵押' in rule_desc and '过路费' in rule_desc:
-                    key_rules['mortgage_no_rent'] = f'✅ {rule_desc}'
-                elif '特殊地块' in rule_desc:
-                    key_rules['special_no_build'] = f'✅ {rule_desc}'
-                elif '停着' in rule_desc and '盖房' in rule_desc:
-                    key_rules['stop_to_build'] = f'✅ {rule_desc}'
-                elif '卡牌' in rule_desc:
-                    key_rules['card_cycle'] = f'✅ {rule_desc}'
-                elif '破产' in rule_desc:
-                    key_rules['bankruptcy_sell'] = f'✅ {rule_desc}'
-
-            elif '❌' in line or '未通过' in line or '失败' in line:
-                rule_desc = line.replace('❌', '').replace('未通过', '').replace('失败', '').strip()
-                if '起点' in rule_desc:
-                    key_rules['pass_start_bonus'] = f'❌ {rule_desc}'
-                elif '抵押' in rule_desc and '过路费' in rule_desc:
-                    key_rules['mortgage_no_rent'] = f'❌ {rule_desc}'
-                elif '特殊地块' in rule_desc:
-                    key_rules['special_no_build'] = f'❌ {rule_desc}'
-                elif '停着' in rule_desc and '盖房' in rule_desc:
-                    key_rules['stop_to_build'] = f'❌ {rule_desc}'
-                elif '卡牌' in rule_desc:
-                    key_rules['card_cycle'] = f'❌ {rule_desc}'
-                elif '破产' in rule_desc:
-                    key_rules['bankruptcy_sell'] = f'❌ {rule_desc}'
-
-    return key_rules

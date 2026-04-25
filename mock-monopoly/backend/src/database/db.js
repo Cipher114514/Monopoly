@@ -45,9 +45,10 @@ class Database {
             throw new Error('游戏不存在');
         }
 
-        const updated = { ...game, ...updates, updatedAt: new Date() };
-        this.games.set(gameId, updated);
-        return updated;
+        // 使用Object.assign保留原型方法，而不是展开运算符
+        Object.assign(game, updates, { updatedAt: new Date() });
+        this.games.set(gameId, game);
+        return game;
     }
 
     /**
