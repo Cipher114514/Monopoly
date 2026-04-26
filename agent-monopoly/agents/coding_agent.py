@@ -5,6 +5,9 @@ Coding Agent - 高级开发者
 输出: 前后端代码
 """
 
+import os
+import re
+import subprocess
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from ..types import AgentState
 
@@ -151,6 +154,51 @@ export default function GameRoom() {
 """
 
 
+def save_code_to_disk(content: str, workspace_path: str = "mock-monopoly"):
+    """
+    解析 AI 输出中的代码块并保存到磁盘
+    规范: 期待格式为 [FILE: path/to/file] \n ```language \n code \n ```
+    """
+    if not os.path.exists(workspace_path):
+        os.makedirs(workspace_path)
+
+    # 简单的正则匹配 [FILE: path] 紧跟代码块
+    file_pattern = r'\[FILE:\s*(.*?)\]\s*```.*?\n(.*?)\n```'
+    matches = re.findall(file_pattern, content, re.DOTALL)
+
+    saved_files = []
+    
+    # 如果没找到特殊标记，尝试按普通的 Markdown 块寻找（兜底方案）
+    if not matches:
+        blocks = re.findall(r'```.*?\s+(.*?)\s+```', content, re.DOTALL)
+        # 这里逻辑较弱，建议提示词强制要求 [FILE] 标记
+    else:
+        for file_path, file_content in matches:
+            full_path = os.path.join(workspace_path, file_path.strip())
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            with open(full_path, "w", encoding="utf-8") as f:
+                f.write(file_content.strip())
+            saved_files.append(file_path.strip())
+
+    # Git 提交逻辑
+    try:
+        # 检查是否是 git 仓库
+        if not os.path.exists(os.path.join(workspace_path, ".git")):
+            subprocess.run(["git", "-C", workspace_path, "init"], check=True, capture_output=True)
+        
+        subprocess.run(["git", "-C", workspace_path, "add", "."], check=True, capture_output=True)
+        
+        # 检查是否有变更需要 commit
+        status = subprocess.run(["git", "-C", workspace_path, "status", "--porcelain"], capture_output=True, text=True).stdout
+        if status:
+            subprocess.run(["git", "-C", workspace_path, "commit", "-m", "Auto-commit from Coding Agent"], check=True, capture_output=True)
+            print(f"📦 Git: 代码已提交到本地仓库")
+    except Exception as e:
+        print(f"⚠️ Git 操作失败: {e}")
+
+    return saved_files
+
+
 def create_coding_agent(llm):
     """创建 Coding Agent 工厂函数"""
 
@@ -177,22 +225,27 @@ def create_coding_agent(llm):
             messages = [
                 SystemMessage(content=CODING_AGENT_PROMPT),
                 HumanMessage(content=f"""
-项目: {state.get('project_name', '在线大富翁')}
+                项目: {state.get('project_name', '在线大富翁')}
 
-## 当前代码
-{state.get('code', {}).get('content', '无')}
+                ## 当前代码
+                {state.get('code', {}).get('content', '无')}
 
-## 测试发现的Bug
-{format_bugs_for_fix(bugs)}
+                ## 测试发现的Bug
+                {format_bugs_for_fix(bugs)}
 
-## 任务
-修复上述Bug，只修改有问题的部分，不要改变其他代码。
+                ## 任务
+                修复上述Bug，只修改有问题的部分，不要改变其他代码。
 
-要求：
-1. 准确定位Bug位置
-2. 提供修复后的代码
-3. 确保修复不引入新问题
-""")
+                要求：
+                1. 准确定位Bug位置
+                2. 提供修复后的代码
+                3. 请严格使用以下格式输出修复后的文件内容：
+                   [FILE: 相对路径/文件名]
+                   ```语言
+                   代码内容
+                   ```
+                4. 确保修复不引入新问题
+                """)
             ]
         else:
             # 首次生成代码
@@ -204,45 +257,54 @@ def create_coding_agent(llm):
             messages = [
                 SystemMessage(content=CODING_AGENT_PROMPT),
                 HumanMessage(content=f"""
-项目: {state.get('project_name', '在线大富翁')}
+                项目: {state.get('project_name', '在线大富翁')}
 
-系统设计:
-- 架构层次: {design.get('modules', [])}
-- 技术栈: {', '.join(architecture.get('tech_stack', []))}
+                系统设计:
+                - 架构层次: {design.get('modules', [])}
+                - 技术栈: {', '.join(architecture.get('tech_stack', []))}
 
-请生成：
-1. 后端代码（Express.js 或 FastAPI）
-   - API 路由
-   - WebSocket 处理
-   - 数据库操作
+                请生成：
+                1. 后端代码（Express.js 或 FastAPI）
+                  - API 路由
+                  - WebSocket 处理
+                  - 数据库操作
 
-2. 前端代码（React）
-   - 组件结构
-   - 状态管理
-   - Socket.io 集成
+                2. 前端代码（React）
+                  - 组件结构
+                  - 状态管理
+                  - Socket.io 集成
 
-3. 数据库 Schema（PostgreSQL）
+                3. 数据库 Schema（PostgreSQL）
 
-4. 项目配置和运行说明
+                4. 项目配置和运行说明
 
-要求：
-- 代码完整可运行
-- 包含错误处理
-- 实现实时通信
-- 考虑性能优化
-""")
-        ]
+                要求：
+                - 请严格使用以下格式输出代码文件：
+                  [FILE: 相对路径/文件名]
+                  ```语言
+                  代码内容
+                  ```
+                - 代码完整可运行
+                - 包含错误处理
+                - 实现实时通信
+                - 考虑性能优化
+                """)
+            ]
 
         try:
             response = llm.invoke(messages)
             code_content = response.content
 
+            # 保存文件到磁盘
+            saved_files = save_code_to_disk(code_content)
+
             code_data = {
                 "content": code_content,
-                "backend_files": ["app.js", "routes/api.js", "services/gameService.js"],
-                "frontend_files": ["App.jsx", "components/GameRoom.jsx", "hooks/useGame.js"],
-                "database_files": ["schema.sql", "migrations/001_init.sql"],
-                "config_files": [".env.example", "package.json"],
+                "saved_files": saved_files,
+                "backend_files": [f for f in saved_files if "backend" in f or "server" in f],
+                "frontend_files": [f for f in saved_files if "frontend" in f or "client" in f],
+                "database_files": [f for f in saved_files if "sql" in f or "db" in f],
+                "config_files": [f for f in saved_files if "package" in f or "env" in f],
             }
 
             state["current_agent"] = "Coding Agent"
