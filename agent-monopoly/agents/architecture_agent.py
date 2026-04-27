@@ -221,11 +221,26 @@ def extract_tech_stack(arch_doc: str) -> list:
 def extract_database_schema(arch_doc: str) -> list:
     """提取数据库表"""
     tables = []
+    # 完整大富翁游戏数据表
+    default_tables = [
+        "users (用户表)",
+        "game_rooms (游戏房间表)",
+        "room_players (房间玩家表)",
+        "properties (地产属性表)",
+        "player_properties (玩家地产所有权表)",
+        "game_transactions (游戏交易记录表)"
+    ]
+    
     if "CREATE TABLE" in arch_doc:
-        tables.append("users (用户表)")
-        tables.append("game_rooms (游戏房间表)")
-        tables.append("games (游戏记录表)")
-    return tables
+        # 从生成的文档中提取实际表名
+        lines = arch_doc.split('\n')
+        for line in lines:
+            if "CREATE TABLE" in line:
+                parts = line.split()
+                if len(parts) >= 3:
+                    tables.append(parts[2])
+    
+    return tables if tables else default_tables
 
 
 def extract_api_endpoints(arch_doc: str) -> list:
@@ -233,13 +248,26 @@ def extract_api_endpoints(arch_doc: str) -> list:
     endpoints = []
     lines = arch_doc.split('\n')
     for line in lines:
-        if "POST /" in line or "GET /" in line:
-            endpoints.append(line.strip())
-    return endpoints[:10] if endpoints else [
-        "POST /api/auth/register",
-        "POST /api/auth/login",
-        "POST /api/rooms",
-        "WebSocket /game/{room_id}"
+        stripped = line.strip()
+        if (stripped.startswith("POST /") or stripped.startswith("GET /") or 
+            stripped.startswith("PUT /") or stripped.startswith("DELETE /") or
+            stripped.startswith("WebSocket /")):
+            endpoints.append(stripped)
+    
+    return endpoints[:20] if endpoints else [
+        # 认证接口
+        "POST /api/v1/auth/register",
+        "POST /api/v1/auth/login",
+        # 房间接口
+        "POST /api/v1/rooms",
+        "GET /api/v1/rooms",
+        "POST /api/v1/rooms/{room_id}/join",
+        "POST /api/v1/rooms/{room_id}/leave",
+        # 游戏接口
+        "POST /api/v1/games/{room_id}/start",
+        "POST /api/v1/games/{room_id}/roll",
+        "POST /api/v1/games/{room_id}/buy-property",
+        "WebSocket /ws/game/{room_id}"
     ]
 
 
