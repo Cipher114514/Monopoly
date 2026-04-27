@@ -12,6 +12,8 @@ Agent Workflow - 总领文件
 
 from langchain_core.runnables import RunnableLambda
 from langgraph.graph import StateGraph, END
+import os
+import subprocess
 
 from .types import AgentState
 from .agents.pm_agent import create_pm_agent
@@ -166,6 +168,18 @@ class AgentWorkflow:
             print(f"📋 项目名称: {project_name}")
             print(f"📝 用户需求: {user_requirement[:100]}...")
             print("="*70)
+
+        # 初始化输出文件夹和 Git
+        workspace_path = "mock-monopoly"
+        if not os.path.exists(workspace_path):
+            os.makedirs(workspace_path)
+        
+        try:
+            if not os.path.exists(os.path.join(workspace_path, ".git")):
+                subprocess.run(["git", "-C", workspace_path, "init"], check=True, capture_output=True)
+                print(f"📁 已初始化工作目录: {workspace_path} (Git 已就绪)")
+        except Exception:
+            pass
 
         # 初始状态
         initial_state = {
