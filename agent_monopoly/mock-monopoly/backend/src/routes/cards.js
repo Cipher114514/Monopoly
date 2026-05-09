@@ -9,32 +9,32 @@ router.post('/draw', authMiddleware, async (req, res) => {
   try {
     const { roomId, cardType } = req.body;
     
-    // 验证请求参数
     if (!roomId || !cardType || (cardType !== 'chance' && cardType !== 'chest')) {
       return res.status(400).json({
         code: 400,
-        message: '无效的请求参数'
+        message: '请求参数无效'
       });
     }
     
-    // 获取当前用户ID（从JWT中解析）
+    // 获取当前用户ID（从认证中间件获取）
     const userId = req.user.id;
     
-    // 检查用户是否在指定房间中
+    // 检查用户是否在房间中
     const playerCheck = db.prepare(`
-      SELECT 1 FROM players 
-      WHERE user_id = ? AND room_id = ?
+      SELECT p.* FROM players p
+      JOIN rooms r ON p.roomId = r.id
+      WHERE p.userId = ? AND p.roomId = ? AND r.status = 'playing'
     `).get(userId, roomId);
     
     if (!playerCheck) {
       return res.status(403).json({
         code: 403,
-        message: '您不在该房间中'
+        message: '您不在该房间中或游戏未开始'
       });
     }
     
-    // 从卡牌堆中随机抽取一张卡牌
-    const card = Card.drawCard(roomId, cardType);
+    // 从指定类型的卡牌堆中随机抽取一张卡
+    const card = Card.drawCard(roomId, cardType, playerCheck.id);
     
     if (!card) {
       return res.status(404).json({
@@ -43,22 +43,18 @@ router.post('/draw', authMiddleware, async (req, res) => {
       });
     }
     
-    // 更新卡牌状态，标记为已使用
-    db.prepare(`
-      UPDATE cards 
-      SET status = 'used', player_id = ?, used_at = datetime('now')
-      WHERE id = ?
-    `).run(userId, card.id);
+    // 应用卡牌效果
+    const result = Card.applyCardEffect(card, roomId, playerCheck.id);
     
-    // 返回抽取的卡牌信息
     res.json({
       code: 200,
       data: {
         cardId: card.id,
-        cardType: card.card_type,
+        cardType: card.cardType,
         description: card.description,
         effect: card.effect,
-        playerId: userId
+        playerId: playerCheck.id,
+        ...result
       }
     });
     
@@ -79,30 +75,20 @@ router.get('/', authMiddleware, async (req, res) => {
     let query = 'SELECT * FROM cards';
     let params = [];
     
-    // 如果指定了卡牌类型，添加筛选条件
     if (cardType && (cardType === 'chance' || cardType === 'chest')) {
-      query += ' WHERE card_type = ?';
+      query += ' WHERE cardType = ?';
       params.push(cardType);
     }
     
-    // 按类型和ID排序
-    query += ' ORDER BY card_type, id';
+    query += ' ORDER BY cardType, id';
     
     const cards = db.prepare(query).all(...params);
-    
-    // 格式化卡牌数据
-    const formattedCards = cards.map(card => ({
-      id: card.id,
-      cardType: card.card_type,
-      description: card.description,
-      effect: card.effect
-    }));
     
     res.json({
       code: 200,
       data: {
-        cards: formattedCards,
-        total: formattedCards.length
+        cards,
+        total: cards.length
       }
     });
     

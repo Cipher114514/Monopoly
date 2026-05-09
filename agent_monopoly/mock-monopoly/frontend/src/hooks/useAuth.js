@@ -1,77 +1,93 @@
-import { useState, useEffect } from 'react';
-import { apiClient } from '../utils/apiClient';
+import { useState, useEffect, createContext, useContext } from 'react';
+import axios from 'axios';
+
+const AuthContext = createContext();
 
 export const useAuth = () => {
   const [user, setUser] = useState(null);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
+  // 初始化时检查本地存储的token
   useEffect(() => {
     const token = localStorage.getItem('token');
     if (token) {
-      // Verify token and get user info
-      apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      apiClient.get('/users/me')
-        .then(response => {
-          setUser(response.data);
-          setIsAuthenticated(true);
-        })
-        .catch(() => {
-          localStorage.removeItem('token');
-          setIsAuthenticated(false);
-        })
-        .finally(() => {
-          setLoading(false);
-        });
+      // 验证token有效性
+      axios.get('/api/auth/me', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      .then(response => {
+        setUser(response.data);
+      })
+      .catch(err => {
+        localStorage.removeItem('token');
+        setError('Token expired or invalid');
+      })
+      .finally(() => {
+        setLoading(false);
+      });
     } else {
       setLoading(false);
     }
   }, []);
 
-  const login = async (credentials) => {
+  const login = async (username, password) => {
     try {
-      const response = await apiClient.post('/auth/login', credentials);
+      setError(null);
+      const response = await axios.post('/api/auth/login', { username, password });
+      
       const { token, userInfo } = response.data;
       localStorage.setItem('token', token);
-      apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       setUser(userInfo);
-      setIsAuthenticated(true);
+      
       return { success: true };
-    } catch (error) {
-      return { success: false, message: error.response?.data?.message || 'Login failed' };
+    } catch (err) {
+      setError(err.response?.data?.message || 'Login failed');
+      return { success: false, error: err.response?.data?.message };
     }
   };
 
-  const register = async (userData) => {
+  const register = async (username, password) => {
     try {
-      const response = await apiClient.post('/auth/register', userData);
+      setError(null);
+      const response = await axios.post('/api/auth/register', { username, password });
+      
       const { token, userInfo } = response.data;
       localStorage.setItem('token', token);
-      apiClient.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       setUser(userInfo);
-      setIsAuthenticated(true);
+      
       return { success: true };
-    } catch (error) {
-      return { success: false, message: error.response?.data?.message || 'Registration failed' };
+    } catch (err) {
+      setError(err.response?.data?.message || 'Registration failed');
+      return { success: false, error: err.response?.data?.message };
     }
   };
 
   const logout = () => {
     localStorage.removeItem('token');
-    delete apiClient.defaults.headers.common['Authorization'];
     setUser(null);
-    setIsAuthenticated(false);
   };
 
   return {
     user,
-    isAuthenticated,
     loading,
+    error,
     login,
     register,
-    logout
+    logout,
+    isAuthenticated: !!user
   };
 };
-```
 
+export const AuthProvider = ({ children }) => {
+  const auth = useAuth();
+  
+  return (
+    <AuthContext.Provider value={auth}>
+      {children}
+    </AuthContext.Provider>
+  );
+};
+
+export const useAuthContext = () => useContext(AuthContext);
 ```

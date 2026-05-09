@@ -2,41 +2,42 @@ const express = require('express');
 const router = express.Router();
 const { db } = require('../db/connection');
 const authMiddleware = require('../middleware/auth');
+const Player = require('../models/Player');
 
 // 获取指定玩家的状态信息
 router.get('/:playerId', authMiddleware, async (req, res) => {
   try {
     const playerId = req.params.playerId;
-    const userId = req.user.id; // 从认证中间件获取用户ID
     
-    // 验证玩家ID是否存在且属于当前用户
-    const playerQuery = `
-      SELECT p.*, u.username 
-      FROM players p
-      JOIN users u ON p.user_id = u.id
-      WHERE p.id = ? AND p.user_id = ?
-    `;
+    // 验证玩家ID格式
+    if (!playerId) {
+      return res.status(400).json({
+        code: 400,
+        message: '玩家ID不能为空'
+      });
+    }
     
-    const player = db.prepare(playerQuery).get(playerId, userId);
+    // 从数据库获取玩家信息
+    const player = await Player.findById(playerId);
     
     if (!player) {
       return res.status(404).json({
         code: 404,
-        message: '玩家不存在或无权访问'
+        message: '玩家不存在'
       });
     }
     
     // 获取玩家拥有的地产
     const propertiesQuery = `
-      SELECT id FROM properties WHERE owner_id = ?
+      SELECT p.* FROM properties p 
+      WHERE p.owner_id = ?
     `;
-    const properties = db.prepare(propertiesQuery).all(playerId);
+    const properties = await db.prepare(propertiesQuery).all(playerId);
     
     // 构建响应数据
     const playerData = {
       id: player.id,
       user_id: player.user_id,
-      username: player.username,
       room_id: player.room_id,
       position: player.position,
       money: player.money,
@@ -52,7 +53,7 @@ router.get('/:playerId', authMiddleware, async (req, res) => {
       data: playerData
     });
   } catch (error) {
-    console.error('获取玩家信息错误:', error);
+    console.error('获取玩家信息失败:', error);
     res.status(500).json({
       code: 500,
       message: '服务器内部错误'
@@ -64,57 +65,64 @@ router.get('/:playerId', authMiddleware, async (req, res) => {
 router.get('/rooms/:roomId/players', authMiddleware, async (req, res) => {
   try {
     const roomId = req.params.roomId;
-    const userId = req.user.id;
     
-    // 验证用户是否在该房间中
-    const roomQuery = `
-      SELECT r.id 
-      FROM rooms r
-      JOIN players p ON r.id = p.room_id
-      WHERE r.id = ? AND p.user_id = ?
-    `;
-    
-    const room = db.prepare(roomQuery).get(roomId, userId);
-    
-    if (!room) {
-      return res.status(403).json({
-        code: 403,
-        message: '无权访问该房间'
+    // 验证房间ID格式
+    if (!roomId) {
+      return res.status(400).json({
+        code: 400,
+        message: '房间ID不能为空'
       });
     }
     
-    // 获取房间内所有玩家信息
+    // 检查房间是否存在
+    const roomQuery = 'SELECT id FROM rooms WHERE id = ?';
+    const room = await db.prepare(roomQuery).get(roomId);
+    
+    if (!room) {
+      return res.status(404).json({
+        code: 404,
+        message: '房间不存在'
+      });
+    }
+    
+    // 获取房间内所有玩家
     const playersQuery = `
       SELECT p.*, u.username 
-      FROM players p
-      JOIN users u ON p.user_id = u.id
+      FROM players p 
+      JOIN users u ON p.user_id = u.id 
       WHERE p.room_id = ?
-      ORDER BY p.created_at
     `;
+    const players = await db.prepare(playersQuery).all(roomId);
     
-    const players = db.prepare(playersQuery).all(roomId);
-    
-    // 构建响应数据
-    const playersData = players.map(player => ({
-      id: player.id,
-      user_id: player.user_id,
-      username: player.username,
-      position: player.position,
-      money: player.money,
-      properties: [], // 这里可以扩展获取地产详情
-      in_game: player.in_game,
-      is_ready: player.is_ready
+    // 为每个玩家获取其拥有的地产
+    const playersWithProperties = await Promise.all(players.map(async (player) => {
+      const propertiesQuery = `
+        SELECT p.id FROM properties p 
+        WHERE p.owner_id = ?
+      `;
+      const properties = await db.prepare(propertiesQuery).all(player.id);
+      
+      return {
+        id: player.id,
+        user_id: player.user_id,
+        username: player.username,
+        position: player.position,
+        money: player.money,
+        properties: properties.map(p => p.id),
+        in_game: player.in_game,
+        is_ready: player.is_ready
+      };
     }));
     
     res.json({
       code: 200,
       data: {
         roomId: roomId,
-        players: playersData
+        players: playersWithProperties
       }
     });
   } catch (error) {
-    console.error('获取房间玩家信息错误:', error);
+    console.error('获取房间玩家列表失败:', error);
     res.status(500).json({
       code: 500,
       message: '服务器内部错误'

@@ -1,15 +1,16 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const { body, validationResult } = require('express-validator');
 const { db } = require('../db/connection');
 const User = require('../models/User');
-const { validationResult } = require('express-validator');
-const { body } = require('express-validator');
+const authMiddleware = require('../middleware/auth');
+const rateLimiter = require('../middleware/rateLimiter');
 
 const router = express.Router();
 
-// 验证规则
-const registerValidation = [
+// 用户注册
+router.post('/register', [
   body('username')
     .isLength({ min: 3, max: 20 })
     .withMessage('用户名长度必须在3-20个字符之间')
@@ -17,44 +18,32 @@ const registerValidation = [
     .withMessage('用户名只能包含字母、数字和下划线'),
   body('password')
     .isLength({ min: 6 })
-    .withMessage('密码长度至少为6个字符'),
+    .withMessage('密码长度至少为6位'),
   body('email')
     .optional()
     .isEmail()
     .withMessage('请输入有效的电子邮箱地址')
-];
+], async (req, res) => {
+  // 验证输入
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      code: 400,
+      message: '验证错误',
+      errors: errors.array()
+    });
+  }
 
-const loginValidation = [
-  body('username')
-    .notEmpty()
-    .withMessage('用户名不能为空'),
-  body('password')
-    .notEmpty()
-    .withMessage('密码不能为空')
-];
+  const { username, password, email } = req.body;
 
-// 用户注册
-router.post('/register', registerValidation, async (req, res) => {
   try {
-    // 验证输入
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        code: 400,
-        message: '验证错误',
-        errors: errors.array()
-      });
-    }
-
-    const { username, password, email } = req.body;
-
     // 检查用户名是否已存在
     const existingUser = await User.findByUsername(username);
     if (existingUser) {
       return res.status(409).json({
         code: 409,
         message: '用户名已存在',
-        errors: ['该用户名已被注册']
+        errors: ['该用户名已被使用']
       });
     }
 
@@ -80,17 +69,16 @@ router.post('/register', registerValidation, async (req, res) => {
       email
     });
 
-    // 获取新创建的用户信息（不返回密码）
-    const newUser = await User.findById(userId);
+    // 返回用户信息（不包含密码）
+    const user = await User.findById(userId);
+    const { password: _, ...userWithoutPassword } = user;
 
     res.status(201).json({
       code: 201,
       message: '用户注册成功',
       data: {
-        id: newUser.id,
-        username: newUser.username,
-        email: newUser.email,
-        created_at: newUser.created_at
+        ...userWithoutPassword,
+        created_at: new Date().toISOString()
       }
     });
   } catch (error) {
@@ -98,26 +86,33 @@ router.post('/register', registerValidation, async (req, res) => {
     res.status(500).json({
       code: 500,
       message: '服务器内部错误',
-      errors: [error.message]
+      errors: ['注册过程中发生错误']
     });
   }
 });
 
 // 用户登录
-router.post('/login', loginValidation, async (req, res) => {
+router.post('/login', rateLimiter.loginLimiter, [
+  body('username')
+    .notEmpty()
+    .withMessage('用户名不能为空'),
+  body('password')
+    .notEmpty()
+    .withMessage('密码不能为空')
+], async (req, res) => {
+  // 验证输入
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      code: 400,
+      message: '验证错误',
+      errors: errors.array()
+    });
+  }
+
+  const { username, password } = req.body;
+
   try {
-    // 验证输入
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        code: 400,
-        message: '验证错误',
-        errors: errors.array()
-      });
-    }
-
-    const { username, password } = req.body;
-
     // 查找用户
     const user = await User.findByUsername(username);
     if (!user) {
@@ -145,20 +140,15 @@ router.post('/login', loginValidation, async (req, res) => {
       { expiresIn: '24h' }
     );
 
-    // 获取用户详细信息（不返回密码）
-    const userProfile = await User.findById(user.id);
+    // 返回令牌和用户信息（不包含密码）
+    const { password: _, ...userWithoutPassword } = user;
 
     res.json({
       code: 200,
       message: '登录成功',
       data: {
         token,
-        user: {
-          id: userProfile.id,
-          username: userProfile.username,
-          email: userProfile.email,
-          created_at: userProfile.created_at
-        }
+        user: userWithoutPassword
       }
     });
   } catch (error) {
@@ -166,13 +156,13 @@ router.post('/login', loginValidation, async (req, res) => {
     res.status(500).json({
       code: 500,
       message: '服务器内部错误',
-      errors: [error.message]
+      errors: ['登录过程中发生错误']
     });
   }
 });
 
 // 获取用户信息
-router.get('/profile', require('../middleware/auth'), async (req, res) => {
+router.get('/profile', authMiddleware, async (req, res) => {
   try {
     const userId = req.user.userId;
     const user = await User.findById(userId);
@@ -185,16 +175,16 @@ router.get('/profile', require('../middleware/auth'), async (req, res) => {
       });
     }
 
+    // 不返回密码
+    const { password: _, ...userWithoutPassword } = user;
+
     res.json({
       code: 200,
       message: '获取用户信息成功',
       data: {
-        id: user.id,
-        username: user.username,
-        email: user.email,
+        ...userWithoutPassword,
         created_at: user.created_at,
-        games_played: user.games_played || 0,
-        games_won: user.games_won || 0
+        updated_at: user.updated_at
       }
     });
   } catch (error) {
@@ -202,13 +192,13 @@ router.get('/profile', require('../middleware/auth'), async (req, res) => {
     res.status(500).json({
       code: 500,
       message: '服务器内部错误',
-      errors: [error.message]
+      errors: ['获取用户信息过程中发生错误']
     });
   }
 });
 
 // 更新用户信息
-router.put('/profile', require('../middleware/auth'), [
+router.put('/profile', authMiddleware, [
   body('email')
     .optional()
     .isEmail()
@@ -220,23 +210,22 @@ router.put('/profile', require('../middleware/auth'), [
   body('new_password')
     .optional()
     .isLength({ min: 6 })
-    .withMessage('新密码长度至少为6个字符')
+    .withMessage('新密码长度至少为6位')
 ], async (req, res) => {
+  // 验证输入
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      code: 400,
+      message: '验证错误',
+      errors: errors.array()
+    });
+  }
+
+  const userId = req.user.userId;
+  const { email, current_password, new_password } = req.body;
+
   try {
-    // 验证输入
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        code: 400,
-        message: '验证错误',
-        errors: errors.array()
-      });
-    }
-
-    const userId = req.user.userId;
-    const { email, current_password, new_password } = req.body;
-
-    // 获取用户信息
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({
@@ -246,7 +235,7 @@ router.put('/profile', require('../middleware/auth'), [
       });
     }
 
-    // 如果提供了新密码，需要验证当前密码
+    // 如果要修改密码，需要验证当前密码
     if (new_password) {
       if (!current_password) {
         return res.status(400).json({
@@ -256,7 +245,6 @@ router.put('/profile', require('../middleware/auth'), [
         });
       }
 
-      // 验证当前密码
       const isPasswordValid = await bcrypt.compare(current_password, user.password);
       if (!isPasswordValid) {
         return res.status(401).json({
@@ -285,7 +273,7 @@ router.put('/profile', require('../middleware/auth'), [
       user.email = email;
     }
 
-    // 更新用户
+    // 更新用户信息
     await User.update(userId, {
       email: user.email,
       password: user.password
@@ -293,16 +281,14 @@ router.put('/profile', require('../middleware/auth'), [
 
     // 获取更新后的用户信息
     const updatedUser = await User.findById(userId);
+    const { password: _, ...userWithoutPassword } = updatedUser;
 
     res.json({
       code: 200,
       message: '用户信息更新成功',
       data: {
-        id: updatedUser.id,
-        username: updatedUser.username,
-        email: updatedUser.email,
-        created_at: updatedUser.created_at,
-        updated_at: updatedUser.updated_at
+        ...userWithoutPassword,
+        updated_at: new Date().toISOString()
       }
     });
   } catch (error) {
@@ -310,12 +296,10 @@ router.put('/profile', require('../middleware/auth'), [
     res.status(500).json({
       code: 500,
       message: '服务器内部错误',
-      errors: [error.message]
+      errors: ['更新用户信息过程中发生错误']
     });
   }
 });
 
 module.exports = router;
-```
-
 ```

@@ -9,6 +9,7 @@ router.post('/create', authMiddleware, async (req, res) => {
     const { name, max_players = 6 } = req.body;
     const userId = req.user.id;
     
+    // 验证参数
     if (!name) {
       return res.status(400).json({
         code: 400,
@@ -23,17 +24,22 @@ router.post('/create', authMiddleware, async (req, res) => {
       });
     }
     
-    const room = await roomService.createRoom(name, userId, max_players);
+    const result = await roomService.createRoom({
+      name,
+      max_players,
+      creatorId: userId
+    });
     
     res.json({
       code: 200,
-      data: room
+      data: result
     });
   } catch (error) {
     console.error('创建房间失败:', error);
     res.status(500).json({
       code: 500,
-      message: '创建房间失败'
+      message: '创建房间失败',
+      error: error.message
     });
   }
 });
@@ -43,7 +49,11 @@ router.get('/', authMiddleware, async (req, res) => {
   try {
     const { status, limit = 10, offset = 0 } = req.query;
     
-    const result = await roomService.getRooms(status, parseInt(limit), parseInt(offset));
+    const result = await roomService.getRooms({
+      status,
+      limit: parseInt(limit),
+      offset: parseInt(offset)
+    });
     
     res.json({
       code: 200,
@@ -53,7 +63,8 @@ router.get('/', authMiddleware, async (req, res) => {
     console.error('获取房间列表失败:', error);
     res.status(500).json({
       code: 500,
-      message: '获取房间列表失败'
+      message: '获取房间列表失败',
+      error: error.message
     });
   }
 });
@@ -71,7 +82,10 @@ router.post('/join', authMiddleware, async (req, res) => {
       });
     }
     
-    const result = await roomService.joinRoom(room_id, userId);
+    const result = await roomService.joinRoom({
+      roomId: room_id,
+      userId
+    });
     
     res.json({
       code: 200,
@@ -81,7 +95,8 @@ router.post('/join', authMiddleware, async (req, res) => {
     console.error('加入房间失败:', error);
     res.status(500).json({
       code: 500,
-      message: '加入房间失败'
+      message: '加入房间失败',
+      error: error.message
     });
   }
 });
@@ -99,7 +114,10 @@ router.post('/leave', authMiddleware, async (req, res) => {
       });
     }
     
-    const result = await roomService.leaveRoom(room_id, userId);
+    const result = await roomService.leaveRoom({
+      roomId: room_id,
+      userId
+    });
     
     res.json({
       code: 200,
@@ -109,7 +127,8 @@ router.post('/leave', authMiddleware, async (req, res) => {
     console.error('离开房间失败:', error);
     res.status(500).json({
       code: 500,
-      message: '离开房间失败'
+      message: '离开房间失败',
+      error: error.message
     });
   }
 });
@@ -119,29 +138,21 @@ router.get('/:roomId', authMiddleware, async (req, res) => {
   try {
     const { roomId } = req.params;
     
-    const room = await roomService.getRoomById(roomId);
-    
-    if (!room) {
-      return res.status(404).json({
-        code: 404,
-        message: '房间不存在'
-      });
-    }
+    const result = await roomService.getRoomById(roomId);
     
     res.json({
       code: 200,
-      data: room
+      data: result
     });
   } catch (error) {
     console.error('获取房间详情失败:', error);
     res.status(500).json({
       code: 500,
-      message: '获取房间详情失败'
+      message: '获取房间详情失败',
+      error: error.message
     });
   }
 });
 
 module.exports = router;
-```
-
 ```

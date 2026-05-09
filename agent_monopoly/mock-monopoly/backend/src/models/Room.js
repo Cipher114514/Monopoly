@@ -2,112 +2,140 @@ const { db } = require('../db/connection');
 
 class Room {
   static async create(roomData) {
-    const { name, max_players, creator_id } = roomData;
+    const { name, maxPlayers, createdBy } = roomData;
     const sql = `
-      INSERT INTO rooms (name, max_players, creator_id, status, created_at)
-      VALUES (?, ?, ?, 'waiting', datetime('now'))
+      INSERT INTO rooms (name, max_players, created_by, created_at, status)
+      VALUES (?, ?, ?, datetime('now'), 'waiting')
     `;
-    
-    try {
-      const result = db.prepare(sql).run(name, max_players, creator_id);
-      return { id: result.lastInsertRowid, ...roomData, status: 'waiting' };
-    } catch (error) {
-      throw new Error(`Failed to create room: ${error.message}`);
-    }
+    const result = db.prepare(sql).run(name, maxPlayers, createdBy);
+    return this.findById(result.lastInsertRowid);
   }
 
   static async findById(id) {
     const sql = 'SELECT * FROM rooms WHERE id = ?';
-    try {
-      const room = db.prepare(sql).get(id);
-      return room || null;
-    } catch (error) {
-      throw new Error(`Failed to find room by ID: ${error.message}`);
-    }
+    const room = db.prepare(sql).get(id);
+    if (!room) return null;
+    
+    const playersSql = `
+      SELECT p.id as player_id, p.user_id, p.room_id, p.position, p.balance, 
+             p.is_ready, p.is_bankrupt, p.created_at as player_created_at,
+             u.username
+      FROM players p
+      JOIN users u ON p.user_id = u.id
+      WHERE p.room_id = ?
+    `;
+    const players = db.prepare(playersSql).all(id);
+    
+    return {
+      id: room.id,
+      name: room.name,
+      maxPlayers: room.max_players,
+      createdBy: room.created_by,
+      status: room.status,
+      currentTurn: room.current_turn,
+      createdAt: room.created_at,
+      players: players.map(p => ({
+        id: p.player_id,
+        userId: p.user_id,
+        username: p.username,
+        position: p.position,
+        balance: p.balance,
+        isReady: p.is_ready,
+        isBankrupt: p.is_bankrupt,
+        createdAt: p.player_created_at
+      }))
+    };
   }
 
   static async findAll() {
     const sql = 'SELECT * FROM rooms ORDER BY created_at DESC';
-    try {
-      const rooms = db.prepare(sql).all();
-      return rooms;
-    } catch (error) {
-      throw new Error(`Failed to find all rooms: ${error.message}`);
-    }
+    const rooms = db.prepare(sql).all();
+    return rooms.map(room => ({
+      id: room.id,
+      name: room.name,
+      maxPlayers: room.max_players,
+      createdBy: room.created_by,
+      status: room.status,
+      currentTurn: room.current_turn,
+      createdAt: room.created_at,
+      playerCount: room.player_count || 0
+    }));
   }
 
   static async update(id, roomData) {
-    const { name, max_players, status, winner_id } = roomData;
+    const { name, status, currentTurn } = roomData;
     const sql = `
       UPDATE rooms 
-      SET name = ?, max_players = ?, status = ?, winner_id = ?, updated_at = datetime('now')
+      SET name = ?, status = ?, current_turn = ? 
       WHERE id = ?
     `;
-    
-    try {
-      const result = db.prepare(sql).run(name, max_players, status, winner_id, id);
-      return result.changes > 0;
-    } catch (error) {
-      throw new Error(`Failed to update room: ${error.message}`);
-    }
+    db.prepare(sql).run(name, status, currentTurn, id);
+    return this.findById(id);
   }
 
   static async delete(id) {
     const sql = 'DELETE FROM rooms WHERE id = ?';
-    try {
-      const result = db.prepare(sql).run(id);
-      return result.changes > 0;
-    } catch (error) {
-      throw new Error(`Failed to delete room: ${error.message}`);
-    }
+    db.prepare(sql).run(id);
+    return true;
   }
 
-  static async getPlayers(roomId) {
+  static async addPlayer(roomId, userId) {
     const sql = `
-      SELECT p.*, u.username 
-      FROM players p
-      JOIN users u ON p.user_id = u.id
-      WHERE p.room_id = ?
-      ORDER BY p.position
+      INSERT INTO players (user_id, room_id, position, balance, is_ready, is_bankrupt, created_at)
+      VALUES (?, ?, 0, 1500, 0, 0, datetime('now'))
     `;
-    try {
-      const players = db.prepare(sql).all(roomId);
-      return players;
-    } catch (error) {
-      throw new Error(`Failed to get room players: ${error.message}`);
-    }
+    db.prepare(sql).run(userId, roomId);
+    return this.findById(roomId);
   }
 
-  static async getProperties(roomId) {
-    const sql = `
-      SELECT pr.*, p.username as owner_name
-      FROM properties pr
-      LEFT JOIN players p ON pr.owner_id = p.id
-      WHERE pr.room_id = ?
-    `;
-    try {
-      const properties = db.prepare(sql).all(roomId);
-      return properties;
-    } catch (error) {
-      throw new Error(`Failed to get room properties: ${error.message}`);
-    }
+  static async removePlayer(roomId, userId) {
+    const sql = 'DELETE FROM players WHERE room_id = ? AND user_id = ?';
+    db.prepare(sql).run(roomId, userId);
+    return this.findById(roomId);
   }
 
-  static async getCards(roomId) {
+  static async updatePlayerStatus(roomId, userId, isReady) {
     const sql = `
-      SELECT c.*, p.username as drawn_by_name
-      FROM cards c
-      LEFT JOIN players p ON c.drawn_by_player_id = p.id
-      WHERE c.room_id = ?
+      UPDATE players 
+      SET is_ready = ? 
+      WHERE room_id = ? AND user_id = ?
     `;
-    try {
-      const cards = db.prepare(sql).all(roomId);
-      return cards;
-    } catch (error) {
-      throw new Error(`Failed to get room cards: ${error.message}`);
-    }
+    db.prepare(sql).run(isReady, roomId, userId);
+    return this.findById(roomId);
+  }
+
+  static async updatePlayerPosition(roomId, userId, position) {
+    const sql = `
+      UPDATE players 
+      SET position = ? 
+      WHERE room_id = ? AND user_id = ?
+    `;
+    db.prepare(sql).run(position, roomId, userId);
+    return this.findById(roomId);
+  }
+
+  static async updatePlayerBalance(roomId, userId, balance) {
+    const sql = `
+      UPDATE players 
+      SET balance = ? 
+      WHERE room_id = ? AND user_id = ?
+    `;
+    db.prepare(sql).run(balance, roomId, userId);
+    return this.findById(roomId);
+  }
+
+  static async setPlayerBankrupt(roomId, userId) {
+    const sql = `
+      UPDATE players 
+      SET is_bankrupt = 1 
+      WHERE room_id = ? AND user_id = ?
+    `;
+    db.prepare(sql).run(roomId, userId);
+    return this.findById(roomId);
   }
 }
 
 module.exports = Room;
+```
+
 ```

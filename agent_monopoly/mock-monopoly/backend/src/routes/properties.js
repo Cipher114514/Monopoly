@@ -13,7 +13,7 @@ router.get('/', async (req, res) => {
     const offset = (page - 1) * limit;
     
     const propertiesQuery = `
-      SELECT p.*, u.username as owner_username 
+      SELECT p.*, u.username as ownerName 
       FROM properties p 
       LEFT JOIN users u ON p.owner_id = u.id
       ORDER BY p.position
@@ -22,18 +22,23 @@ router.get('/', async (req, res) => {
     
     const countQuery = 'SELECT COUNT(*) as total FROM properties';
     
-    const [properties] = await db.query(propertiesQuery, [limit, offset]);
-    const [{ total }] = await db.query(countQuery);
+    const [properties] = await db.prepare(propertiesQuery).all(limit, offset);
+    const [{ total }] = await db.prepare(countQuery).get();
     
     const formattedProperties = properties.map(prop => ({
       id: prop.id,
       name: prop.name,
       position: prop.position,
       price: prop.price,
-      owner: prop.owner_username ? { id: prop.owner_id, username: prop.owner_username } : null,
+      owner: prop.owner_id ? {
+        id: prop.owner_id,
+        username: prop.ownerName
+      } : null,
       houses: prop.houses,
       rent: prop.rent,
-      group: prop.group
+      group: prop.group,
+      groupColor: prop.group_color,
+      mortgaged: prop.mortgaged
     }));
     
     res.json({
@@ -64,59 +69,50 @@ router.get('/:propertyId', async (req, res) => {
     const { propertyId } = req.params;
     
     const propertyQuery = `
-      SELECT p.*, u.username as owner_username 
+      SELECT p.*, u.username as ownerName 
       FROM properties p 
       LEFT JOIN users u ON p.owner_id = u.id 
       WHERE p.id = ?
     `;
     
-    const [properties] = await db.query(propertyQuery, [propertyId]);
+    const property = await db.prepare(propertyQuery).get(propertyId);
     
-    if (properties.length === 0) {
+    if (!property) {
       return res.status(404).json({
         code: 404,
         message: '地产不存在'
       });
     }
     
-    const prop = properties[0];
-    const housePrices = {
-      1: prop.house_price_1 || 300000,
-      2: prop.house_price_2 || 300000,
-      3: prop.house_price_3 || 300000,
-      4: prop.house_price_4 || 300000,
-      hotel: prop.hotel_price || 300000
-    };
+    const housePricesQuery = `
+      SELECT house_1_price, house_2_price, house_3_price, house_4_price, hotel_price 
+      FROM property_prices 
+      WHERE property_id = ?
+    `;
     
-    const groupColors = {
-      brown: '#8B4513',
-      light_blue: '#ADD8E6',
-      pink: '#FFC0CB',
-      orange: '#FFA500',
-      red: '#FF0000',
-      yellow: '#FFFF00',
-      green: '#008000',
-      dark_blue: '#000080',
-      utilities: '#808080',
-      railroad: '#000000',
-      start: '#00FF00',
-      jail: '#FF0000',
-      free_parking: '#0000FF',
-      tax: '#808080'
-    };
+    const housePrices = await db.prepare(housePricesQuery).get(propertyId);
     
     const formattedProperty = {
-      id: prop.id,
-      name: prop.name,
-      position: prop.position,
-      price: prop.price,
-      owner: prop.owner_username ? { id: prop.owner_id, username: prop.owner_username } : null,
-      houses: prop.houses,
-      rent: prop.rent,
-      housePrices,
-      group: prop.group,
-      groupColor: groupColors[prop.group] || '#000000',
-      mortgaged: prop.mortgaged === 1
+      id: property.id,
+      name: property.name,
+      position: property.position,
+      price: property.price,
+      owner: property.owner_id ? {
+        id: property.owner_id,
+        username: property.ownerName
+      } : null,
+      houses: property.houses,
+      rent: property.rent,
+      housePrices: {
+        1: housePrices.house_1_price,
+        2: housePrices.house_2_price,
+        3: housePrices.house_3_price,
+        4: housePrices.house_4_price,
+        hotel: housePrices.hotel_price
+      },
+      group: property.group,
+      groupColor: property.group_color,
+      mortgaged: property.mortgaged
     };
     
     res.json({
@@ -141,7 +137,7 @@ router.post('/:propertyId/purchase', async (req, res) => {
     const { roomId, userId } = req.body;
     
     // 验证房间和玩家
-    const room = await Room.findById(roomId);
+    const room = await Room.getById(roomId);
     if (!room) {
       return res.status(404).json({
         code: 404,
@@ -149,11 +145,11 @@ router.post('/:propertyId/purchase', async (req, res) => {
       });
     }
     
-    const player = await Player.findByUserIdAndRoom(userId, roomId);
+    const player = await Player.getByUserId(userId, roomId);
     if (!player) {
       return res.status(404).json({
         code: 404,
-        message: '玩家不存在或不在该房间'
+        message: '玩家不存在'
       });
     }
     
@@ -166,7 +162,7 @@ router.post('/:propertyId/purchase', async (req, res) => {
     }
     
     // 获取地产信息
-    const property = await Property.findById(propertyId);
+    const property = await Property.getById(propertyId);
     if (!property) {
       return res.status(404).json({
         code: 404,
@@ -174,7 +170,7 @@ router.post('/:propertyId/purchase', async (req, res) => {
       });
     }
     
-    // 检查地产是否已有主人
+    // 检查地产是否已被购买
     if (property.owner_id) {
       return res.status(400).json({
         code: 400,
@@ -190,38 +186,37 @@ router.post('/:propertyId/purchase', async (req, res) => {
       });
     }
     
-    // 执行购买操作
-    await db.beginTransaction();
+    // 开始事务
+    const transaction = db.transaction();
     
-    // 扣除玩家资金
-    await db.query(
-      'UPDATE players SET money = money - ? WHERE id = ?',
-      [property.price, player.id]
-    );
-    
-    // 更新地产所有者
-    await db.query(
-      'UPDATE properties SET owner_id = ? WHERE id = ?',
-      [player.id, propertyId]
-    );
-    
-    // 更新玩家资金
-    const updatedPlayer = await Player.findById(player.id);
-    
-    await db.commit();
-    
-    res.json({
-      code: 200,
-      data: {
-        propertyId,
-        ownerId: player.id,
-        price: property.price,
-        remainingMoney: updatedPlayer.money
-      },
-      message: '地产购买成功'
-    });
+    try {
+      // 扣除玩家资金
+      await Player.updateMoney(player.id, player.money - property.price, transaction);
+      
+      // 更新地产所有权
+      await Property.updateOwner(propertyId, player.id, transaction);
+      
+      // 提交事务
+      await transaction.commit();
+      
+      // 获取更新后的玩家信息
+      const updatedPlayer = await Player.getById(player.id);
+      
+      res.json({
+        code: 200,
+        data: {
+          propertyId,
+          ownerId: player.id,
+          price: property.price,
+          remainingMoney: updatedPlayer.money
+        },
+        message: '地产购买成功'
+      });
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
   } catch (error) {
-    await db.rollback();
     console.error('购买地产失败:', error);
     res.status(500).json({
       code: 500,
@@ -238,7 +233,7 @@ router.post('/:propertyId/houses', async (req, res) => {
     const { roomId, userId, houseCount } = req.body;
     
     // 验证房间和玩家
-    const room = await Room.findById(roomId);
+    const room = await Room.getById(roomId);
     if (!room) {
       return res.status(404).json({
         code: 404,
@@ -246,11 +241,11 @@ router.post('/:propertyId/houses', async (req, res) => {
       });
     }
     
-    const player = await Player.findByUserIdAndRoom(userId, roomId);
+    const player = await Player.getByUserId(userId, roomId);
     if (!player) {
       return res.status(404).json({
         code: 404,
-        message: '玩家不存在或不在该房间'
+        message: '玩家不存在'
       });
     }
     
@@ -263,7 +258,7 @@ router.post('/:propertyId/houses', async (req, res) => {
     }
     
     // 获取地产信息
-    const property = await Property.findById(propertyId);
+    const property = await Property.getById(propertyId);
     if (!property) {
       return res.status(404).json({
         code: 404,
@@ -271,7 +266,7 @@ router.post('/:propertyId/houses', async (req, res) => {
       });
     }
     
-    // 检查玩家是否是该地产的所有者
+    // 检查地产是否属于当前玩家
     if (property.owner_id !== player.id) {
       return res.status(400).json({
         code: 400,
@@ -279,19 +274,33 @@ router.post('/:propertyId/houses', async (req, res) => {
       });
     }
     
-    // 检查房屋数量限制
-    if (property.houses + houseCount > 4) {
+    // 检查房屋数量是否已达上限
+    if (property.houses >= 4) {
       return res.status(400).json({
         code: 400,
-        message: '房屋数量不能超过4栋'
+        message: '房屋数量已达上限'
+      });
+    }
+    
+    // 检查建设数量是否合理
+    if (houseCount <= 0 || property.houses + houseCount > 4) {
+      return res.status(400).json({
+        code: 400,
+        message: '无效的建设数量'
       });
     }
     
     // 获取房屋价格
-    const housePrice = property.house_price_1 || 300000;
-    const totalCost = housePrice * houseCount;
+    const housePricesQuery = `
+      SELECT house_${property.houses + 1}_price as price 
+      FROM property_prices 
+      WHERE property_id = ?
+    `;
+    
+    const [{ price }] = await db.prepare(housePricesQuery).all(propertyId);
     
     // 检查玩家是否有足够资金
+    const totalCost = price * houseCount;
     if (player.money < totalCost) {
       return res.status(400).json({
         code: 400,
@@ -299,46 +308,42 @@ router.post('/:propertyId/houses', async (req, res) => {
       });
     }
     
-    // 执行建设操作
-    await db.beginTransaction();
+    // 开始事务
+    const transaction = db.transaction();
     
-    // 扣除玩家资金
-    await db.query(
-      'UPDATE players SET money = money - ? WHERE id = ?',
-      [totalCost, player.id]
-    );
-    
-    // 更新房屋数量
-    await db.query(
-      'UPDATE properties SET houses = houses + ? WHERE id = ?',
-      [houseCount, propertyId]
-    );
-    
-    // 更新租金
-    const newRent = property.rent * (1 + property.houses * 0.5);
-    await db.query(
-      'UPDATE properties SET rent = ? WHERE id = ?',
-      [newRent, propertyId]
-    );
-    
-    // 更新玩家资金
-    const updatedPlayer = await Player.findById(player.id);
-    
-    await db.commit();
-    
-    res.json({
-      code: 200,
-      data: {
-        propertyId,
-        houseCount: property.houses + houseCount,
-        cost: totalCost,
-        remainingMoney: updatedPlayer.money,
-        newRent
-      },
-      message: '房屋建设成功'
-    });
+    try {
+      // 扣除玩家资金
+      await Player.updateMoney(player.id, player.money - totalCost, transaction);
+      
+      // 更新房屋数量
+      await Property.updateHouseCount(propertyId, property.houses + houseCount, transaction);
+      
+      // 更新租金
+      const newRent = property.rent * (1 + 0.5 * houseCount);
+      await Property.updateRent(propertyId, newRent, transaction);
+      
+      // 提交事务
+      await transaction.commit();
+      
+      // 获取更新后的玩家信息
+      const updatedPlayer = await Player.getById(player.id);
+      
+      res.json({
+        code: 200,
+        data: {
+          propertyId,
+          houseCount: property.houses + houseCount,
+          cost: totalCost,
+          remainingMoney: updatedPlayer.money,
+          newRent
+        },
+        message: '房屋建设成功'
+      });
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
   } catch (error) {
-    await db.rollback();
     console.error('建设房屋失败:', error);
     res.status(500).json({
       code: 500,
@@ -355,7 +360,7 @@ router.post('/:propertyId/sell', async (req, res) => {
     const { roomId, userId, sellPrice } = req.body;
     
     // 验证房间和玩家
-    const room = await Room.findById(roomId);
+    const room = await Room.getById(roomId);
     if (!room) {
       return res.status(404).json({
         code: 404,
@@ -363,11 +368,11 @@ router.post('/:propertyId/sell', async (req, res) => {
       });
     }
     
-    const player = await Player.findByUserIdAndRoom(userId, roomId);
+    const player = await Player.getByUserId(userId, roomId);
     if (!player) {
       return res.status(404).json({
         code: 404,
-        message: '玩家不存在或不在该房间'
+        message: '玩家不存在'
       });
     }
     
@@ -380,7 +385,7 @@ router.post('/:propertyId/sell', async (req, res) => {
     }
     
     // 获取地产信息
-    const property = await Property.findById(propertyId);
+    const property = await Property.getById(propertyId);
     if (!property) {
       return res.status(404).json({
         code: 404,
@@ -388,7 +393,7 @@ router.post('/:propertyId/sell', async (req, res) => {
       });
     }
     
-    // 检查玩家是否是该地产的所有者
+    // 检查地产是否属于当前玩家
     if (property.owner_id !== player.id) {
       return res.status(400).json({
         code: 400,
@@ -396,39 +401,46 @@ router.post('/:propertyId/sell', async (req, res) => {
       });
     }
     
-    // 执行出售操作
-    await db.beginTransaction();
+    // 检查是否有房屋
+    if (property.houses > 0) {
+      return res.status(400).json({
+        code: 400,
+        message: '请先出售所有房屋'
+      });
+    }
     
-    // 增加玩家资金
-    await db.query(
-      'UPDATE players SET money = money + ? WHERE id = ?',
-      [sellPrice, player.id]
-    );
+    // 开始事务
+    const transaction = db.transaction();
     
-    // 清除地产所有者
-    await db.query(
-      'UPDATE properties SET owner_id = NULL, houses = 0, rent = ? WHERE id = ?',
-      [property.rent / (1 + property.houses * 0.5), propertyId]
-    );
-    
-    // 更新玩家资金
-    const updatedPlayer = await Player.findById(player.id);
-    
-    await db.commit();
-    
-    res.json({
-      code: 200,
-      data: {
-        propertyId,
-        sellPrice,
-        newOwner: null,
-        gainedMoney: sellPrice,
-        remainingMoney: updatedPlayer.money
-      },
-      message: '地产出售成功'
-    });
+    try {
+      // 增加玩家资金
+      await Player.updateMoney(player.id, player.money + sellPrice, transaction);
+      
+      // 更新地产所有权
+      await Property.updateOwner(propertyId, null, transaction);
+      
+      // 提交事务
+      await transaction.commit();
+      
+      // 获取更新后的玩家信息
+      const updatedPlayer = await Player.getById(player.id);
+      
+      res.json({
+        code: 200,
+        data: {
+          propertyId,
+          sellPrice,
+          newOwner: null,
+          gainedMoney: sellPrice,
+          remainingMoney: updatedPlayer.money
+        },
+        message: '地产出售成功'
+      });
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
   } catch (error) {
-    await db.rollback();
     console.error('出售地产失败:', error);
     res.status(500).json({
       code: 500,

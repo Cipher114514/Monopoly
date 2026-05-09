@@ -25,7 +25,7 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: "http://localhost:5173", // 前端地址
+    origin: "http://localhost:3000",
     methods: ["GET", "POST"]
   }
 });
@@ -33,9 +33,9 @@ const io = socketIo(server, {
 // 中间件配置
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../public')));
+app.use(express.static(path.join(__dirname, '../../frontend/dist')));
 
-// 路由配置
+// API路由
 app.use('/api/auth', authRoutes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/players', playerRoutes);
@@ -71,7 +71,7 @@ app.use((req, res) => {
 });
 
 // 初始化数据库并启动服务器
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 
 const startServer = async () => {
   try {
@@ -82,6 +82,7 @@ const startServer = async () => {
     // 启动服务器
     server.listen(PORT, () => {
       console.log(`服务器运行在端口 ${PORT}`);
+      console.log(`Socket.io 服务器已启动`);
     });
   } catch (error) {
     console.error('服务器启动失败:', error);

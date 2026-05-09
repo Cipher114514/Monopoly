@@ -2,99 +2,86 @@ const { db } = require('../db/connection');
 
 class Card {
   static async create(cardData) {
-    const { type, title, description, effect, room_id } = cardData;
+    const { type, title, description, action, value } = cardData;
     const sql = `
-      INSERT INTO cards (type, title, description, effect, room_id, created_at)
+      INSERT INTO cards (type, title, description, action, value, created_at)
       VALUES (?, ?, ?, ?, ?, datetime('now'))
     `;
-    
-    try {
-      const result = db.prepare(sql).run(type, title, description, effect, room_id);
-      return { id: result.lastInsertRowid, ...cardData };
-    } catch (error) {
-      throw new Error(`Failed to create card: ${error.message}`);
-    }
+    const result = db.prepare(sql).run(type, title, description, action, value);
+    return this.findById(result.lastInsertRowid);
   }
 
   static async findById(id) {
     const sql = 'SELECT * FROM cards WHERE id = ?';
-    try {
-      const card = db.prepare(sql).get(id);
-      return card || null;
-    } catch (error) {
-      throw new Error(`Failed to find card by ID: ${error.message}`);
-    }
-  }
-
-  static async findByRoomId(roomId) {
-    const sql = 'SELECT * FROM cards WHERE room_id = ? ORDER BY created_at';
-    try {
-      const cards = db.prepare(sql).all(roomId);
-      return cards;
-    } catch (error) {
-      throw new Error(`Failed to find cards by room ID: ${error.message}`);
-    }
-  }
-
-  static async drawCard(roomId, cardType, playerId) {
-    const sql = `
-      SELECT * FROM cards 
-      WHERE room_id = ? AND type = ? AND drawn_by_player_id IS NULL
-      ORDER BY RANDOM()
-      LIMIT 1
-    `;
+    const card = db.prepare(sql).get(id);
+    if (!card) return null;
     
-    try {
-      const card = db.prepare(sql).get(roomId, cardType);
-      
-      if (card) {
-        const updateSql = `
-          UPDATE cards 
-          SET drawn_by_player_id = ?, drawn_at = datetime('now')
-          WHERE id = ?
-        `;
-        db.prepare(updateSql).run(playerId, card.id);
-        return card;
-      }
-      
-      return null;
-    } catch (error) {
-      throw new Error(`Failed to draw card: ${error.message}`);
-    }
+    return {
+      id: card.id,
+      type: card.type,
+      title: card.title,
+      description: card.description,
+      action: card.action,
+      value: card.value,
+      createdAt: card.created_at
+    };
   }
 
-  static async resetCard(id) {
+  static async findByType(type) {
+    const sql = 'SELECT * FROM cards WHERE type = ? ORDER BY RANDOM() LIMIT 1';
+    const card = db.prepare(sql).get(type);
+    if (!card) return null;
+    
+    return {
+      id: card.id,
+      type: card.type,
+      title: card.title,
+      description: card.description,
+      action: card.action,
+      value: card.value,
+      createdAt: card.created_at
+    };
+  }
+
+  static async findAll() {
+    const sql = 'SELECT * FROM cards ORDER BY type, id';
+    const cards = db.prepare(sql).all();
+    return cards.map(card => ({
+      id: card.id,
+      type: card.type,
+      title: card.title,
+      description: card.description,
+      action: card.action,
+      value: card.value,
+      createdAt: card.created_at
+    }));
+  }
+
+  static async update(id, cardData) {
+    const { type, title, description, action, value } = cardData;
     const sql = `
       UPDATE cards 
-      SET drawn_by_player_id = NULL, drawn_at = NULL
+      SET type = ?, title = ?, description = ?, action = ?, value = ? 
       WHERE id = ?
     `;
-    
-    try {
-      const result = db.prepare(sql).run(id);
-      return result.changes > 0;
-    } catch (error) {
-      throw new Error(`Failed to reset card: ${error.message}`);
-    }
+    db.prepare(sql).run(type, title, description, action, value, id);
+    return this.findById(id);
   }
 
-  static async getCardHistory(roomId, limit = 10) {
-    const sql = `
-      SELECT c.*, p.username as drawn_by_name
-      FROM cards c
-      JOIN players p ON c.drawn_by_player_id = p.id
-      WHERE c.room_id = ?
-      ORDER BY c.drawn_at DESC
-      LIMIT ?
-    `;
-    try {
-      const history = db.prepare(sql).all(roomId, limit);
-      return history;
-    } catch (error) {
-      throw new Error(`Failed to get card history: ${error.message}`);
-    }
+  static async delete(id) {
+    const sql = 'DELETE FROM cards WHERE id = ?';
+    db.prepare(sql).run(id);
+    return true;
   }
 
-  static async shuffleCards(roomId) {
-    const sql = `
-      UPDATE cards
+  static async drawChanceCard() {
+    return this.findByType('chance');
+  }
+
+  static async drawCommunityChestCard() {
+    return this.findByType('community_chest');
+  }
+}
+
+module.exports = Card;
+```

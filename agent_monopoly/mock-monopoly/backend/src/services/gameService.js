@@ -4,498 +4,382 @@ const Property = require('../models/Property');
 const Card = require('../models/Card');
 
 class GameService {
-  // 掷骰子
+  /**
+   * 掷骰子
+   * @param {number} playerId - 玩家ID
+   * @returns {Promise<{ dice1: number, dice2: number, total: number }>} - 骰子点数结果
+   */
   async rollDice(playerId) {
-    try {
-      // 生成1-6的随机数
-      const diceValue = Math.floor(Math.random() * 6) + 1;
-      
-      // 更新玩家掷骰子状态
-      await db.run(
-        `UPDATE players 
-         SET dice_value = ?, has_rolled = 1 
-         WHERE id = ?`,
-        [diceValue, playerId]
-      );
-      
-      return { success: true, diceValue };
-    } catch (error) {
-      console.error('Error rolling dice:', error);
-      return { success: false, error: 'Failed to roll dice' };
-    }
+    const dice1 = Math.floor(Math.random() * 6) + 1;
+    const dice2 = Math.floor(Math.random() * 6) + 1;
+    const total = dice1 + dice2;
+    
+    // 更新玩家掷骰子状态
+    await db.run(
+      `UPDATE players 
+       SET dice1 = ?, dice2 = ?, last_roll = ?
+       WHERE id = ?`,
+      [dice1, dice2, total, playerId]
+    );
+    
+    return { dice1, dice2, total };
   }
 
-  // 移动玩家
+  /**
+   * 移动玩家
+   * @param {number} playerId - 玩家ID
+   * @param {number} steps - 移动步数
+   * @returns {Promise<{ newPosition: number, passedGo: boolean }>} - 移动结果
+   */
   async movePlayer(playerId, steps) {
-    try {
-      // 获取当前玩家信息
-      const player = await db.get(
-        `SELECT position, money, passed_start 
-         FROM players 
-         WHERE id = ?`,
+    // 获取玩家当前位置
+    const player = await db.get('SELECT position FROM players WHERE id = ?', [playerId]);
+    if (!player) {
+      throw new Error('Player not found');
+    }
+    
+    const oldPosition = player.position;
+    let newPosition = oldPosition + steps;
+    let passedGo = false;
+    
+    // 检查是否经过起点
+    if (newPosition >= 40) {
+      passedGo = true;
+      newPosition = newPosition % 40;
+      
+      // 经过起点奖励
+      await db.run(
+        'UPDATE players SET money = money + 200 WHERE id = ?',
         [playerId]
       );
-      
-      if (!player) {
-        throw new Error('Player not found');
-      }
-      
-      // 计算新位置（大富翁棋盘是40格）
-      const boardSize = 40;
-      let newPosition = (player.position + steps) % boardSize;
-      let passedStart = false;
-      
-      // 检查是否经过起点
-      if (player.position + steps >= boardSize) {
-        passedStart = true;
-        // 经过起点奖励
-        await db.run(
-          `UPDATE players 
-           SET money = money + 200, passed_start = 1 
-           WHERE id = ?`,
-          [playerId]
-        );
-      }
-      
-      // 更新玩家位置
-      await db.run(
-        `UPDATE players 
-         SET position = ?, passed_start = 0 
-         WHERE id = ?`,
-        [newPosition, playerId]
-      );
-      
-      // 检查新位置的事件
-      const event = await this.handlePositionEvent(playerId, newPosition);
-      
-      return { 
-        success: true, 
-        newPosition, 
-        passedStart, 
-        event 
-      };
-    } catch (error) {
-      console.error('Error moving player:', error);
-      return { success: false, error: 'Failed to move player' };
     }
+    
+    // 更新玩家位置
+    await db.run(
+      'UPDATE players SET position = ? WHERE id = ?',
+      [newPosition, playerId]
+    );
+    
+    return { newPosition, passedGo };
   }
 
-  // 处理位置事件（地产、机会卡、命运卡等）
-  async handlePositionEvent(playerId, position) {
-    try {
-      // 检查是否是地产
-      const property = await db.get(
-        `SELECT * FROM properties WHERE position = ?`,
-        [position]
-      );
-      
-      if (property) {
-        // 如果地产无人拥有，可以购买
-        if (!property.owner_id) {
-          return { type: 'property', action: 'buy', property };
-        }
-        // 如果是自己的地产，无事发生
-        else if (property.owner_id === playerId) {
-          return { type: 'property', action: 'own', property };
-        }
-        // 如果是他人地产，需要支付租金
-        else {
-          const rent = this.calculateRent(property);
-          await this.payRent(playerId, property.owner_id, rent);
-          return { type: 'property', action: 'rent', property, rent };
-        }
-      }
-      
-      // 检查是否是机会卡位置
-      const chancePosition = [7, 22, 36];
-      if (chancePosition.includes(position)) {
-        const card = await this.drawCard('chance');
-        await this.executeCardEffect(playerId, card);
-        return { type: 'chance', card };
-      }
-      
-      // 检查是否是命运卡位置
-      const communityChestPosition = [2, 17, 33];
-      if (communityChestPosition.includes(position)) {
-        const card = await this.drawCard('community_chest');
-        await this.executeCardEffect(playerId, card);
-        return { type: 'community_chest', card };
-      }
-      
-      // 其他位置（如税收、监狱等）
-      return { type: 'normal' };
-    } catch (error) {
-      console.error('Error handling position event:', error);
-      return { type: 'error', error: 'Failed to handle position event' };
-    }
-  }
-
-  // 购买地产
+  /**
+   * 购买地产
+   * @param {number} playerId - 玩家ID
+   * @param {number} propertyId - 地产ID
+   * @returns {Promise<{ success: boolean, message: string }>} - 购买结果
+   */
   async buyProperty(playerId, propertyId) {
+    // 获取玩家信息
+    const player = await db.get('SELECT * FROM players WHERE id = ?', [playerId]);
+    if (!player) {
+      throw new Error('Player not found');
+    }
+    
+    // 获取地产信息
+    const property = await db.get('SELECT * FROM properties WHERE id = ?', [propertyId]);
+    if (!property) {
+      throw new Error('Property not found');
+    }
+    
+    // 检查地产是否已拥有
+    if (property.owner_id !== null) {
+      return { success: false, message: 'Property already owned' };
+    }
+    
+    // 检查玩家是否有足够资金
+    if (player.money < property.price) {
+      return { success: false, message: 'Insufficient funds' };
+    }
+    
+    // 执行购买
+    await db.run('BEGIN TRANSACTION');
     try {
-      // 获取玩家和地产信息
-      const player = await db.get(
-        `SELECT money FROM players WHERE id = ?`,
-        [playerId]
-      );
-      
-      const property = await db.get(
-        `SELECT * FROM properties WHERE id = ?`,
-        [propertyId]
-      );
-      
-      if (!player || !property) {
-        throw new Error('Player or property not found');
-      }
-      
-      // 检查地产是否可购买
-      if (property.owner_id) {
-        throw new Error('Property already owned');
-      }
-      
-      // 检查玩家是否有足够资金
-      if (player.money < property.price) {
-        throw new Error('Insufficient funds');
-      }
-      
-      // 执行购买
+      // 扣除玩家资金
       await db.run(
-        `UPDATE players 
-         SET money = money - ? 
-         WHERE id = ?`,
+        'UPDATE players SET money = money - ? WHERE id = ?',
         [property.price, playerId]
       );
       
+      // 更新地产所有权
       await db.run(
-        `UPDATE properties 
-         SET owner_id = ? 
-         WHERE id = ?`,
+        'UPDATE properties SET owner_id = ? WHERE id = ?',
         [playerId, propertyId]
       );
       
+      await db.run('COMMIT');
       return { success: true, message: 'Property purchased successfully' };
     } catch (error) {
-      console.error('Error buying property:', error);
-      return { success: false, error: error.message };
+      await db.run('ROLLBACK');
+      throw error;
     }
   }
 
-  // 计算租金
-  calculateRent(property) {
-    // 基础租金
-    let rent = property.rent;
-    
-    // 如果有房子，增加租金
-    if (property.houses > 0) {
-      rent = property.rent * Math.pow(2, property.houses);
+  /**
+   * 收取租金
+   * @param {number} playerId - 落地玩家ID
+   * @returns {Promise<{ rentPaid: number, ownerId: number } | null}> - 租金信息，如果无人拥有则返回null
+   */
+  async collectRent(playerId) {
+    // 获取玩家位置
+    const player = await db.get('SELECT position FROM players WHERE id = ?', [playerId]);
+    if (!player) {
+      throw new Error('Player not found');
     }
     
-    // 如果是同色地产全部拥有，租金翻倍
-    const colorGroupProperties = db.all(
-      `SELECT COUNT(*) as count FROM properties 
-       WHERE color_group = ? AND owner_id = ?`,
-      [property.color_group, property.owner_id]
+    // 获取位置上的地产
+    const property = await db.get(
+      'SELECT * FROM properties WHERE position = ? AND owner_id IS NOT NULL',
+      [player.position]
     );
     
-    if (colorGroupProperties[0].count === this.getPropertiesInGroup(property.color_group).length) {
-      rent *= 2;
+    if (!property) {
+      return null; // 无人拥有
     }
     
-    return rent;
-  }
-
-  // 支付租金
-  async payRent(payerId, receiverId, amount) {
+    // 计算租金
+    let rent = property.base_rent;
+    
+    // 根据房屋数量增加租金
+    if (property.house_count > 0) {
+      rent = property.base_rent * Math.pow(2, property.house_count);
+    }
+    
+    // 获取地主信息
+    const owner = await db.get('SELECT * FROM players WHERE id = ?', [property.owner_id]);
+    
+    // 检查玩家是否有足够资金支付租金
+    if (player.money < rent) {
+      // 破产处理
+      await this.handleBankruptcy(playerId, property.owner_id);
+      return { rentPaid: player.money, ownerId: property.owner_id };
+    }
+    
+    // 执行租金交易
+    await db.run('BEGIN TRANSACTION');
     try {
-      // 检查付款人是否有足够资金
-      const payer = await db.get(
-        `SELECT money FROM players WHERE id = ?`,
-        [payerId]
-      );
-      
-      if (payer.money < amount) {
-        // 破产处理
-        await this.handleBankruptcy(payerId, receiverId);
-        return { success: false, message: 'Player is bankrupt' };
-      }
-      
-      // 执行转账
+      // 从玩家扣除租金
       await db.run(
-        `UPDATE players 
-         SET money = money - ? 
-         WHERE id = ?`,
-        [amount, payerId]
+        'UPDATE players SET money = money - ? WHERE id = ?',
+        [rent, playerId]
       );
       
+      // 给地主增加租金
       await db.run(
-        `UPDATE players 
-         SET money = money + ? 
-         WHERE id = ?`,
-        [amount, receiverId]
+        'UPDATE players SET money = money + ? WHERE id = ?',
+        [rent, property.owner_id]
       );
       
-      return { success: true, message: 'Rent paid successfully' };
+      await db.run('COMMIT');
+      return { rentPaid: rent, ownerId: property.owner_id };
     } catch (error) {
-      console.error('Error paying rent:', error);
-      return { success: false, error: 'Failed to pay rent' };
+      await db.run('ROLLBACK');
+      throw error;
     }
   }
 
-  // 建造房屋
+  /**
+   * 建设房屋
+   * @param {number} playerId - 玩家ID
+   * @param {number} propertyId - 地产ID
+   * @returns {Promise<{ success: boolean, message: string }>} - 建设结果
+   */
   async buildHouse(playerId, propertyId) {
+    // 获取玩家信息
+    const player = await db.get('SELECT * FROM players WHERE id = ?', [playerId]);
+    if (!player) {
+      throw new Error('Player not found');
+    }
+    
+    // 获取地产信息
+    const property = await db.get('SELECT * FROM properties WHERE id = ?', [propertyId]);
+    if (!property) {
+      throw new Error('Property not found');
+    }
+    
+    // 检查玩家是否是地主
+    if (property.owner_id !== playerId) {
+      return { success: false, message: 'You do not own this property' };
+    }
+    
+    // 检查房屋数量上限
+    if (property.house_count >= 4) {
+      return { success: false, message: 'Maximum houses reached' };
+    }
+    
+    // 检查玩家是否有足够资金
+    const housePrice = property.price * 0.5; // 房屋价格是地产价格的一半
+    if (player.money < housePrice) {
+      return { success: false, message: 'Insufficient funds for house' };
+    }
+    
+    // 执行建设
+    await db.run('BEGIN TRANSACTION');
     try {
-      // 获取玩家和地产信息
-      const player = await db.get(
-        `SELECT money FROM players WHERE id = ?`,
-        [playerId]
-      );
-      
-      const property = await db.get(
-        `SELECT * FROM properties WHERE id = ?`,
-        [propertyId]
-      );
-      
-      if (!player || !property) {
-        throw new Error('Player or property not found');
-      }
-      
-      // 检查是否是自己的地产
-      if (property.owner_id !== playerId) {
-        throw new Error('Not the owner of this property');
-      }
-      
-      // 检查是否已达到最大房屋数
-      if (property.houses >= 4) {
-        throw new Error('Maximum houses reached');
-      }
-      
-      // 检查是否有足够资金
-      const housePrice = property.house_price || 50;
-      if (player.money < housePrice) {
-        throw new Error('Insufficient funds');
-      }
-      
-      // 检查同色地产是否全部拥有
-      const colorGroupProperties = db.all(
-        `SELECT id FROM properties 
-         WHERE color_group = ? AND owner_id = ?`,
-        [property.color_group, playerId]
-      );
-      
-      if (colorGroupProperties.length !== this.getPropertiesInGroup(property.color_group).length) {
-        throw new Error('Must own all properties in the color group to build houses');
-      }
-      
-      // 检查同色地产的房屋数量是否均衡
-      for (const prop of colorGroupProperties) {
-        const propInfo = await db.get(
-          `SELECT houses FROM properties WHERE id = ?`,
-          [prop.id]
-        );
-        if (propInfo.houses < property.houses) {
-          throw new Error('Must build houses evenly across all properties in the color group');
-        }
-      }
-      
-      // 执行建造
+      // 扣除玩家资金
       await db.run(
-        `UPDATE players 
-         SET money = money - ? 
-         WHERE id = ?`,
+        'UPDATE players SET money = money - ? WHERE id = ?',
         [housePrice, playerId]
       );
       
+      // 更新房屋数量
       await db.run(
-        `UPDATE properties 
-         SET houses = houses + 1 
-         WHERE id = ?`,
+        'UPDATE properties SET house_count = house_count + 1 WHERE id = ?',
         [propertyId]
       );
       
+      await db.run('COMMIT');
       return { success: true, message: 'House built successfully' };
     } catch (error) {
-      console.error('Error building house:', error);
-      return { success: false, error: error.message };
+      await db.run('ROLLBACK');
+      throw error;
     }
   }
 
-  // 抽卡
-  async drawCard(type) {
-    try {
-      // 获取一张随机卡
-      const card = await db.get(
-        `SELECT * FROM cards 
-         WHERE type = ? 
-         ORDER BY RANDOM() 
-         LIMIT 1`,
-        [type]
-      );
-      
-      return card;
-    } catch (error) {
-      console.error('Error drawing card:', error);
-      return null;
+  /**
+   * 抽取机会/命运卡
+   * @param {number} playerId - 玩家ID
+   * @param {string} cardType - 卡牌类型 ('chance' 或 'community')
+   * @returns {Promise<{ card: object, effectApplied: boolean }>} - 卡牌信息
+   */
+  async drawCard(playerId, cardType) {
+    // 获取随机卡牌
+    const card = await db.get(
+      'SELECT * FROM cards WHERE type = ? AND used = 0 ORDER BY RANDOM() LIMIT 1',
+      [cardType]
+    );
+    
+    if (!card) {
+      // 如果没有可用卡牌，重置所有卡牌状态
+      await db.run('UPDATE cards SET used = 0 WHERE type = ?', [cardType]);
+      // 重新抽取
+      return this.drawCard(playerId, cardType);
     }
-  }
-
-  // 执行卡牌效果
-  async executeCardEffect(playerId, card) {
-    try {
-      if (!card) return;
-      
-      switch (card.action) {
-        case 'money':
-          // 获得金钱
-          await db.run(
-            `UPDATE players 
-             SET money = money + ? 
-             WHERE id = ?`,
-            [card.amount, playerId]
-          );
-          break;
-          
-        case 'pay':
-          // 支付金钱
-          await db.run(
-            `UPDATE players 
-             SET money = money - ? 
-             WHERE id = ?`,
-            [card.amount, playerId]
-          );
-          break;
-          
-        case 'move':
-          // 移动到指定位置
-          await db.run(
-            `UPDATE players 
-             SET position = ? 
-             WHERE id = ?`,
-            [card.position, playerId]
-          );
-          break;
-          
-        case 'jail':
-          // 进监狱
-          await db.run(
-            `UPDATE players 
-             SET position = 10, in_jail = 1 
-             WHERE id = ?`,
-            [playerId]
-          );
-          break;
-          
-        case 'get_out_of_jail':
-          // 获得出狱卡
-          await db.run(
-            `UPDATE players 
-             SET get_out_of_jail_free = get_out_of_jail_free + 1 
-             WHERE id = ?`,
-            [playerId]
-          );
-          break;
-          
-        default:
-          break;
-      }
-      
-      return { success: true, message: 'Card effect executed' };
-    } catch (error) {
-      console.error('Error executing card effect:', error);
-      return { success: false, error: 'Failed to execute card effect' };
-    }
-  }
-
-  // 处理破产
-  async handleBankruptcy(playerId, receiverId) {
-    try {
-      // 将玩家所有地产转移给债权人
+    
+    // 标记卡牌为已使用
+    await db.run('UPDATE cards SET used = 1 WHERE id = ?', [card.id]);
+    
+    let effectApplied = false;
+    
+    // 应用卡牌效果
+    if (card.effect_type === 'money') {
+      // 金钱效果
       await db.run(
-        `UPDATE properties 
-         SET owner_id = ? 
-         WHERE owner_id = ?`,
-        [receiverId, playerId]
+        'UPDATE players SET money = money + ? WHERE id = ?',
+        [card.effect_value, playerId]
       );
-      
-      // 重置玩家金钱
+      effectApplied = true;
+    } else if (card.effect_type === 'move') {
+      // 移动效果
+      await this.movePlayer(playerId, card.effect_value);
+      effectApplied = true;
+    } else if (card.effect_type === 'jail') {
+      // 进监狱效果
+      await db.run('UPDATE players SET position = 10, in_jail = 1 WHERE id = ?', [playerId]);
+      effectApplied = true;
+    } else if (card.effect_type === 'get_out_of_jail') {
+      // 出狱卡
+      // 这里只是标记玩家拥有出狱卡，实际使用时再处理
       await db.run(
-        `UPDATE players 
-         SET money = 0, is_bankrupt = 1 
-         WHERE id = ?`,
+        'UPDATE players SET get_out_of_jail_free = get_out_of_jail_free + 1 WHERE id = ?',
         [playerId]
       );
-      
-      return { success: true, message: 'Player declared bankrupt' };
-    } catch (error) {
-      console.error('Error handling bankruptcy:', error);
-      return { success: false, error: 'Failed to handle bankruptcy' };
+      effectApplied = true;
     }
+    
+    return { card, effectApplied };
   }
 
-  // 获取指定颜色的所有地产
-  getPropertiesInGroup(colorGroup) {
-    // 这里应该从数据库获取，但为了简化，返回硬编码值
-    // 实际实现中应该查询数据库
-    return [
-      { color_group: colorGroup },
-      // 其他同色地产...
-    ];
+  /**
+   * 处理破产
+   * @param {number} playerId - 破产玩家ID
+   * @param {number} creditorId - 债主ID（如果是欠租金）
+   */
+  async handleBankruptcy(playerId, creditorId = null) {
+    // 获取破产玩家信息
+    const player = await db.get('SELECT * FROM players WHERE id = ?', [playerId]);
+    if (!player) {
+      throw new Error('Player not found');
+    }
+    
+    // 获取玩家拥有的所有地产
+    const properties = await db.all(
+      'SELECT * FROM properties WHERE owner_id = ?',
+      [playerId]
+    );
+    
+    // 将所有地产归还给银行
+    for (const property of properties) {
+      await db.run(
+        'UPDATE properties SET owner_id = NULL, house_count = 0 WHERE id = ?',
+        [property.id]
+      );
+    }
+    
+    // 如果有债主，将玩家剩余资金转移给债主
+    if (creditorId && player.money > 0) {
+      await db.run(
+        'UPDATE players SET money = money + ? WHERE id = ?',
+        [player.money, creditorId]
+      );
+    }
+    
+    // 将玩家资金清零
+    await db.run('UPDATE players SET money = 0 WHERE id = ?', [playerId]);
+    
+    // 标记玩家为破产状态
+    await db.run('UPDATE players SET is_bankrupt = 1 WHERE id = ?', [playerId]);
   }
 
-  // 结束回合
-  async endTurn(playerId) {
-    try {
-      // 重置玩家掷骰子状态
-      await db.run(
-        `UPDATE players 
-         SET has_rolled = 0, dice_value = 0 
-         WHERE id = ?`,
-        [playerId]
-      );
-      
-      // 获取房间信息
-      const player = await db.get(
-        `SELECT room_id FROM players WHERE id = ?`,
-        [playerId]
-      );
-      
-      if (!player) {
-        throw new Error('Player not found');
-      }
-      
-      // 获取房间内所有玩家
-      const players = await db.all(
-        `SELECT id, position FROM players 
-         WHERE room_id = ? 
-         ORDER BY position`,
-        [player.room_id]
-      );
-      
-      // 找到下一个玩家
-      const currentIndex = players.findIndex(p => p.id === playerId);
-      const nextIndex = (currentIndex + 1) % players.length;
-      const nextPlayerId = players[nextIndex].id;
-      
-      // 更新当前玩家
-      await db.run(
-        `UPDATE players 
-         SET is_current = 0 
-         WHERE room_id = ?`,
-        [player.room_id]
-      );
-      
-      // 设置下一个玩家
-      await db.run(
-        `UPDATE players 
-         SET is_current = 1 
-         WHERE id = ?`,
-        [nextPlayerId]
-      );
-      
-      return { success: true, nextPlayerId };
-    } catch (error) {
-      console.error('Error ending turn:', error);
-      return { success: false, error: 'Failed to end turn' };
+  /**
+   * 结束当前回合
+   * @param {number} currentPlayerId - 当前玩家ID
+   * @param {number} nextPlayerId - 下一个玩家ID
+   */
+  async endTurn(currentPlayerId, nextPlayerId) {
+    // 重置当前玩家的掷骰子状态
+    await db.run(
+      'UPDATE players SET dice1 = NULL, dice2 = NULL, last_roll = NULL WHERE id = ?',
+      [currentPlayerId]
+    );
+    
+    // 设置下一个玩家为当前玩家
+    await db.run(
+      'UPDATE rooms SET current_player_id = ? WHERE id = (SELECT room_id FROM players WHERE id = ?)',
+      [nextPlayerId, nextPlayerId]
+    );
+  }
+
+  /**
+   * 获取游戏状态
+   * @param {number} roomId - 房间ID
+   * @returns {Promise<object>} - 游戏状态
+   */
+  async getGameState(roomId) {
+    // 获取房间信息
+    const room = await db.get('SELECT * FROM rooms WHERE id = ?', [roomId]);
+    if (!room) {
+      throw new Error('Room not found');
     }
+    
+    // 获取所有玩家信息
+    const players = await db.all(
+      'SELECT * FROM players WHERE room_id = ? ORDER BY turn_order',
+      [roomId]
+    );
+    
+    // 获取所有地产信息
+    const properties = await db.all(
+      'SELECT * FROM properties WHERE room_id = ?',
+      [roomId]
+    );
+    
+    return {
+      room,
+      players,
+      properties,
+      currentPlayerId: room.current_player_id
+    };
   }
 }
 
