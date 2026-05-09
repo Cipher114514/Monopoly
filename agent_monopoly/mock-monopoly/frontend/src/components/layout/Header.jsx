@@ -1,7 +1,6 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
-import { useSocket } from '../../hooks/useSocket';
 import styled from 'styled-components';
 
 const HeaderContainer = styled.header`
@@ -17,7 +16,7 @@ const HeaderContainer = styled.header`
 const Logo = styled.h1`
   font-size: 1.5rem;
   margin: 0;
-  color: #e74c3c;
+  color: #f39c12;
 `;
 
 const Nav = styled.nav`
@@ -31,9 +30,14 @@ const NavLink = styled(Link)`
   padding: 0.5rem 1rem;
   border-radius: 4px;
   transition: background-color 0.3s;
-
+  
   &:hover {
     background-color: #34495e;
+  }
+  
+  &.active {
+    background-color: #f39c12;
+    color: #2c3e50;
   }
 `;
 
@@ -43,7 +47,11 @@ const UserInfo = styled.div`
   gap: 1rem;
 `;
 
-const DisconnectButton = styled.button`
+const Username = styled.span`
+  font-weight: bold;
+`;
+
+const LogoutButton = styled.button`
   background-color: #e74c3c;
   color: white;
   border: none;
@@ -51,7 +59,7 @@ const DisconnectButton = styled.button`
   border-radius: 4px;
   cursor: pointer;
   transition: background-color 0.3s;
-
+  
   &:hover {
     background-color: #c0392b;
   }
@@ -59,26 +67,24 @@ const DisconnectButton = styled.button`
 
 const Header = () => {
   const { user, logout } = useAuth();
-  const socket = useSocket();
   const navigate = useNavigate();
 
-  const handleDisconnect = () => {
-    if (socket) {
-      socket.disconnect();
-    }
+  const handleLogout = () => {
     logout();
-    navigate('/');
+    navigate('/login');
   };
 
   return (
     <HeaderContainer>
-      <Logo>大富翁游戏</Logo>
+      <Logo>Monopoly Online</Logo>
       <Nav>
-        <NavLink to="/lobby">大厅</NavLink>
+        <NavLink to="/lobby" className={({ isActive }) => isActive ? 'active' : ''}>
+          Lobby
+        </NavLink>
       </Nav>
       <UserInfo>
-        {user && <span>欢迎, {user.username}</span>}
-        {user && <DisconnectButton onClick={handleDisconnect}>退出</DisconnectButton>}
+        <Username>Welcome, {user?.username}</Username>
+        <LogoutButton onClick={handleLogout}>Logout</LogoutButton>
       </UserInfo>
     </HeaderContainer>
   );

@@ -1,150 +1,113 @@
-const Database = require('better-sqlite3');
-const db = new Database('./backend/data/monopoly.db');
+const { db } = require('../db/connection');
 
 class Player {
-  static create(playerData) {
-    const { userId, roomId, position, money, inJail, jailTurns, bankrupt } = playerData;
-    const stmt = db.prepare(`
-      INSERT INTO players (user_id, room_id, position, money, in_jail, jail_turns, bankrupt, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    `);
-    const result = stmt.run(userId, roomId, position, money, inJail, jailTurns, bankrupt);
-    return result.lastInsertRowid;
+  static async create(playerData) {
+    const { user_id, room_id, position, balance } = playerData;
+    const sql = `
+      INSERT INTO players (user_id, room_id, position, balance, is_ready, created_at)
+      VALUES (?, ?, ?, ?, 0, datetime('now'))
+    `;
+    
+    try {
+      const result = db.prepare(sql).run(user_id, room_id, position, balance);
+      return { id: result.lastInsertRowid, ...playerData, is_ready: false };
+    } catch (error) {
+      throw new Error(`Failed to create player: ${error.message}`);
+    }
   }
 
-  static findById(id) {
-    const stmt = db.prepare('SELECT * FROM players WHERE id = ?');
-    return stmt.get(id);
+  static async findById(id) {
+    const sql = 'SELECT * FROM players WHERE id = ?';
+    try {
+      const player = db.prepare(sql).get(id);
+      return player || null;
+    } catch (error) {
+      throw new Error(`Failed to find player by ID: ${error.message}`);
+    }
   }
 
-  static findByUserIdAndRoom(userId, roomId) {
-    const stmt = db.prepare('SELECT * FROM players WHERE user_id = ? AND room_id = ?');
-    return stmt.get(userId, roomId);
+  static async findByUserIdAndRoom(userId, roomId) {
+    const sql = 'SELECT * FROM players WHERE user_id = ? AND room_id = ?';
+    try {
+      const player = db.prepare(sql).get(userId, roomId);
+      return player || null;
+    } catch (error) {
+      throw new Error(`Failed to find player by user ID and room ID: ${error.message}`);
+    }
   }
 
-  static updatePosition(id, position) {
-    const stmt = db.prepare(`
+  static async update(id, playerData) {
+    const { position, balance, is_ready, final_balance, is_bankrupt } = playerData;
+    const sql = `
       UPDATE players 
-      SET position = ? 
+      SET position = ?, balance = ?, is_ready = ?, final_balance = ?, is_bankrupt = ?, updated_at = datetime('now')
       WHERE id = ?
-    `);
-    const result = stmt.run(position, id);
-    return result.changes > 0;
+    `;
+    
+    try {
+      const result = db.prepare(sql).run(position, balance, is_ready, final_balance, is_bankrupt, id);
+      return result.changes > 0;
+    } catch (error) {
+      throw new Error(`Failed to update player: ${error.message}`);
+    }
   }
 
-  static updateMoney(id, amount) {
-    const stmt = db.prepare(`
-      UPDATE players 
-      SET money = ? 
-      WHERE id = ?
-    `);
-    const result = stmt.run(amount, id);
-    return result.changes > 0;
+  static async delete(id) {
+    const sql = 'DELETE FROM players WHERE id = ?';
+    try {
+      const result = db.prepare(sql).run(id);
+      return result.changes > 0;
+    } catch (error) {
+      throw new Error(`Failed to delete player: ${error.message}`);
+    }
   }
 
-  static addMoney(id, amount) {
-    const stmt = db.prepare(`
-      UPDATE players 
-      SET money = money + ? 
-      WHERE id = ?
-    `);
-    const result = stmt.run(amount, id);
-    return result.changes > 0;
+  static async getOwnedProperties(playerId) {
+    const sql = `
+      SELECT p.*, pr.name as property_name, pr.price, pr.rent
+      FROM property_ownership po
+      JOIN properties pr ON po.property_id = pr.id
+      WHERE po.player_id = ?
+    `;
+    try {
+      const properties = db.prepare(sql).all(playerId);
+      return properties;
+    } catch (error) {
+      throw new Error(`Failed to get owned properties: ${error.message}`);
+    }
   }
 
-  static subtractMoney(id, amount) {
-    const stmt = db.prepare(`
-      UPDATE players 
-      SET money = money - ? 
-      WHERE id = ?
-    `);
-    const result = stmt.run(amount, id);
-    return result.changes > 0;
+  static async rollDice(playerId) {
+    const sql = `
+      INSERT INTO dice_rolls (player_id, dice1, dice2, created_at)
+      VALUES (?, ?, ?, datetime('now'))
+    `;
+    
+    try {
+      const dice1 = Math.floor(Math.random() * 6) + 1;
+      const dice2 = Math.floor(Math.random() * 6) + 1;
+      const result = db.prepare(sql).run(playerId, dice1, dice2);
+      return { id: result.lastInsertRowid, dice1, dice2, total: dice1 + dice2 };
+    } catch (error) {
+      throw new Error(`Failed to roll dice: ${error.message}`);
+    }
   }
 
-  static setInJail(id, inJail, jailTurns = 0) {
-    const stmt = db.prepare(`
-      UPDATE players 
-      SET in_jail = ?, jail_turns = ? 
-      WHERE id = ?
-    `);
-    const result = stmt.run(inJail, jailTurns, id);
-    return result.changes > 0;
-  }
-
-  static incrementJailTurns(id) {
-    const stmt = db.prepare(`
-      UPDATE players 
-      SET jail_turns = jail_turns + 1 
-      WHERE id = ?
-    `);
-    const result = stmt.run(id);
-    return result.changes > 0;
-  }
-
-  static setBankrupt(id, bankrupt) {
-    const stmt = db.prepare(`
-      UPDATE players 
-      SET bankrupt = ? 
-      WHERE id = ?
-    `);
-    const result = stmt.run(bankrupt, id);
-    return result.changes > 0;
-  }
-
-  static getPlayersByRoom(roomId) {
-    const stmt = db.prepare(`
-      SELECT p.*, u.username 
-      FROM players p
-      JOIN users u ON p.user_id = u.id
-      WHERE p.room_id = ? 
-      ORDER BY p.id
-    `);
-    return stmt.all(roomId);
-  }
-
-  static getCurrentTurn(roomId) {
-    const stmt = db.prepare(`
-      SELECT current_turn 
-      FROM rooms 
-      WHERE id = ?
-    `);
-    const result = stmt.get(roomId);
-    return result ? result.current_turn : null;
-  }
-
-  static setCurrentTurn(roomId, playerId) {
-    const stmt = db.prepare(`
-      UPDATE rooms 
-      SET current_turn = ? 
-      WHERE id = ?
-    `);
-    const result = stmt.run(playerId, roomId);
-    return result.changes > 0;
-  }
-
-  static incrementTurn(roomId) {
-    const stmt = db.prepare(`
-      UPDATE rooms 
-      SET current_turn = current_turn + 1 
-      WHERE id = ?
-    `);
-    const result = stmt.run(roomId);
-    return result.changes > 0;
-  }
-
-  static resetTurn(roomId) {
-    const stmt = db.prepare(`
-      UPDATE rooms 
-      SET current_turn = 0 
-      WHERE id = ?
-    `);
-    const result = stmt.run(roomId);
-    return result.changes > 0;
+  static async getDiceRolls(playerId) {
+    const sql = `
+      SELECT * FROM dice_rolls 
+      WHERE player_id = ? 
+      ORDER BY created_at DESC 
+      LIMIT 10
+    `;
+    try {
+      const rolls = db.prepare(sql).all(playerId);
+      return rolls;
+    } catch (error) {
+      throw new Error(`Failed to get dice rolls: ${error.message}`);
+    }
   }
 }
 
 module.exports = Player;
-```
-
 ```

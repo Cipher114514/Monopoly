@@ -1,145 +1,152 @@
-const Database = require('better-sqlite3');
-const db = new Database('./backend/data/monopoly.db');
+const { db } = require('../db/connection');
 
 class Property {
-  static create(propertyData) {
-    const { name, position, price, rent, color, house_cost } = propertyData;
-    const stmt = db.prepare(`
-      INSERT INTO properties (name, position, price, rent, color, house_cost, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-    `);
-    const result = stmt.run(name, position, price, rent, color, house_cost);
-    return result.lastInsertRowid;
+  static async create(propertyData) {
+    const { name, price, rent, position, room_id } = propertyData;
+    const sql = `
+      INSERT INTO properties (name, price, rent, position, room_id, created_at)
+      VALUES (?, ?, ?, ?, ?, datetime('now'))
+    `;
+    
+    try {
+      const result = db.prepare(sql).run(name, price, rent, position, room_id);
+      return { id: result.lastInsertRowid, ...propertyData };
+    } catch (error) {
+      throw new Error(`Failed to create property: ${error.message}`);
+    }
   }
 
-  static findById(id) {
-    const stmt = db.prepare('SELECT * FROM properties WHERE id = ?');
-    return stmt.get(id);
+  static async findById(id) {
+    const sql = 'SELECT * FROM properties WHERE id = ?';
+    try {
+      const property = db.prepare(sql).get(id);
+      return property || null;
+    } catch (error) {
+      throw new Error(`Failed to find property by ID: ${error.message}`);
+    }
   }
 
-  static findByPosition(position) {
-    const stmt = db.prepare('SELECT * FROM properties WHERE position = ?');
-    return stmt.get(position);
+  static async findByRoomId(roomId) {
+    const sql = 'SELECT * FROM properties WHERE room_id = ? ORDER BY position';
+    try {
+      const properties = db.prepare(sql).all(roomId);
+      return properties;
+    } catch (error) {
+      throw new Error(`Failed to find properties by room ID: ${error.message}`);
+    }
   }
 
-  static findAll() {
-    const stmt = db.prepare('SELECT * FROM properties ORDER BY position');
-    return stmt.all();
-  }
-
-  static update(id, propertyData) {
-    const { name, price, rent, color, house_cost } = propertyData;
-    const stmt = db.prepare(`
+  static async update(id, propertyData) {
+    const { name, price, rent, house_count } = propertyData;
+    const sql = `
       UPDATE properties 
-      SET name = ?, price = ?, rent = ?, color = ?, house_cost = ? 
+      SET name = ?, price = ?, rent = ?, house_count = ?, updated_at = datetime('now')
       WHERE id = ?
-    `);
-    const result = stmt.run(name, price, rent, color, house_cost, id);
-    return result.changes > 0;
+    `;
+    
+    try {
+      const result = db.prepare(sql).run(name, price, rent, house_count, id);
+      return result.changes > 0;
+    } catch (error) {
+      throw new Error(`Failed to update property: ${error.message}`);
+    }
   }
 
-  static delete(id) {
-    const stmt = db.prepare('DELETE FROM properties WHERE id = ?');
-    const result = stmt.run(id);
-    return result.changes > 0;
+  static async delete(id) {
+    const sql = 'DELETE FROM properties WHERE id = ?';
+    try {
+      const result = db.prepare(sql).run(id);
+      return result.changes > 0;
+    } catch (error) {
+      throw new Error(`Failed to delete property: ${error.message}`);
+    }
   }
 
-  static buyProperty(playerId, propertyId) {
-    const property = this.findById(propertyId);
-    if (!property) return false;
-
-    const stmt = db.prepare(`
-      INSERT INTO player_properties (player_id, property_id, bought_at, houses)
-      VALUES (?, ?, datetime('now'), 0)
-    `);
-    const result = stmt.run(playerId, propertyId);
-    return result.changes > 0;
+  static async getOwner(propertyId) {
+    const sql = `
+      SELECT p.*, u.username 
+      FROM property_ownership po
+      JOIN players p ON po.player_id = p.id
+      JOIN users u ON p.user_id = u.id
+      WHERE po.property_id = ?
+    `;
+    try {
+      const owner = db.prepare(sql).get(propertyId);
+      return owner || null;
+    } catch (error) {
+      throw new Error(`Failed to get property owner: ${error.message}`);
+    }
   }
 
-  static sellProperty(playerId, propertyId) {
-    const stmt = db.prepare(`
-      DELETE FROM player_properties 
-      WHERE player_id = ? AND property_id = ?
-    `);
-    const result = stmt.run(playerId, propertyId);
-    return result.changes > 0;
+  static async setOwner(propertyId, playerId) {
+    const sql = `
+      INSERT OR REPLACE INTO property_ownership (property_id, player_id, created_at)
+      VALUES (?, ?, datetime('now'))
+    `;
+    
+    try {
+      const result = db.prepare(sql).run(propertyId, playerId);
+      return result.changes > 0;
+    } catch (error) {
+      throw new Error(`Failed to set property owner: ${error.message}`);
+    }
   }
 
-  static getOwner(propertyId) {
-    const stmt = db.prepare(`
-      SELECT player_id 
-      FROM player_properties 
-      WHERE property_id = ?
-    `);
-    const result = stmt.get(propertyId);
-    return result ? result.player_id : null;
+  static async removeOwner(propertyId) {
+    const sql = 'DELETE FROM property_ownership WHERE property_id = ?';
+    try {
+      const result = db.prepare(sql).run(propertyId);
+      return result.changes > 0;
+    } catch (error) {
+      throw new Error(`Failed to remove property owner: ${error.message}`);
+    }
   }
 
-  static getPropertiesByPlayer(playerId) {
-    const stmt = db.prepare(`
-      SELECT p.* 
+  static async getRent(propertyId) {
+    const sql = `
+      SELECT p.rent, po.player_id
       FROM properties p
-      JOIN player_properties pp ON p.id = pp.property_id
-      WHERE pp.player_id = ?
-      ORDER BY p.position
-    `);
-    return stmt.all(playerId);
+      LEFT JOIN property_ownership po ON p.id = po.property_id
+      WHERE p.id = ?
+    `;
+    try {
+      const result = db.prepare(sql).get(propertyId);
+      return result ? result.rent : 0;
+    } catch (error) {
+      throw new Error(`Failed to get property rent: ${error.message}`);
+    }
   }
 
-  static getPropertiesByRoom(roomId) {
-    const stmt = db.prepare(`
-      SELECT p.*, pp.player_id, pp.houses
+  static async canBuildHouse(propertyId) {
+    const sql = `
+      SELECT p.house_count, po.player_id
       FROM properties p
-      LEFT JOIN player_properties pp ON p.id = pp.property_id
-      WHERE pp.player_id IN (
-        SELECT user_id FROM players WHERE room_id = ?
-      )
-      ORDER BY p.position
-    `);
-    return stmt.all(roomId);
+      JOIN property_ownership po ON p.id = po.property_id
+      WHERE p.id = ? AND po.player_id IS NOT NULL
+    `;
+    try {
+      const property = db.prepare(sql).get(propertyId);
+      return property && property.house_count < 4;
+    } catch (error) {
+      throw new Error(`Failed to check house build eligibility: ${error.message}`);
+    }
   }
 
-  static addHouse(propertyId) {
-    const stmt = db.prepare(`
-      UPDATE player_properties 
-      SET houses = houses + 1 
-      WHERE property_id = ?
-    `);
-    const result = stmt.run(propertyId);
-    return result.changes > 0;
-  }
-
-  static removeHouse(propertyId) {
-    const stmt = db.prepare(`
-      UPDATE player_properties 
-      SET houses = houses - 1 
-      WHERE property_id = ? AND houses > 0
-    `);
-    const result = stmt.run(propertyId);
-    return result.changes > 0;
-  }
-
-  static getHouseCount(propertyId) {
-    const stmt = db.prepare(`
-      SELECT houses 
-      FROM player_properties 
-      WHERE property_id = ?
-    `);
-    const result = stmt.get(propertyId);
-    return result ? result.houses : 0;
-  }
-
-  static calculateRent(propertyId) {
-    const property = this.findById(propertyId);
-    if (!property) return 0;
-
-    const houseCount = this.getHouseCount(propertyId);
-    const rentMultiplier = Math.pow(2, houseCount);
-    return property.rent * rentMultiplier;
+  static async buildHouse(propertyId) {
+    const sql = `
+      UPDATE properties 
+      SET house_count = house_count + 1, rent = rent * 1.5, updated_at = datetime('now')
+      WHERE id = ?
+    `;
+    
+    try {
+      const result = db.prepare(sql).run(propertyId);
+      return result.changes > 0;
+    } catch (error) {
+      throw new Error(`Failed to build house: ${error.message}`);
+    }
   }
 }
 
 module.exports = Property;
-```
-
 ```

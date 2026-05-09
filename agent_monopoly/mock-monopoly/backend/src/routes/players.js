@@ -1,19 +1,19 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../database');
-const auth = require('../middleware/auth');
+const { db } = require('../db/connection');
+const authMiddleware = require('../middleware/auth');
 
 // 获取指定玩家的状态信息
-router.get('/:playerId', auth, async (req, res) => {
+router.get('/:playerId', authMiddleware, async (req, res) => {
   try {
     const playerId = req.params.playerId;
-    const userId = req.user.id;
+    const userId = req.user.id; // 从认证中间件获取用户ID
     
-    // 查询玩家信息
+    // 验证玩家ID是否存在且属于当前用户
     const playerQuery = `
       SELECT p.*, u.username 
-      FROM players p 
-      JOIN users u ON p.user_id = u.id 
+      FROM players p
+      JOIN users u ON p.user_id = u.id
       WHERE p.id = ? AND p.user_id = ?
     `;
     
@@ -22,20 +22,17 @@ router.get('/:playerId', auth, async (req, res) => {
     if (!player) {
       return res.status(404).json({
         code: 404,
-        message: 'Player not found'
+        message: '玩家不存在或无权访问'
       });
     }
     
-    // 查询玩家拥有的地产
+    // 获取玩家拥有的地产
     const propertiesQuery = `
-      SELECT property_id 
-      FROM player_properties 
-      WHERE player_id = ?
+      SELECT id FROM properties WHERE owner_id = ?
     `;
-    
     const properties = db.prepare(propertiesQuery).all(playerId);
     
-    // 格式化响应数据
+    // 构建响应数据
     const playerData = {
       id: player.id,
       user_id: player.user_id,
@@ -43,7 +40,7 @@ router.get('/:playerId', auth, async (req, res) => {
       room_id: player.room_id,
       position: player.position,
       money: player.money,
-      properties: properties.map(p => p.property_id),
+      properties: properties.map(p => p.id),
       in_game: player.in_game,
       is_ready: player.is_ready,
       created_at: player.created_at,
@@ -55,70 +52,59 @@ router.get('/:playerId', auth, async (req, res) => {
       data: playerData
     });
   } catch (error) {
-    console.error('Error fetching player:', error);
+    console.error('获取玩家信息错误:', error);
     res.status(500).json({
       code: 500,
-      message: 'Internal server error'
+      message: '服务器内部错误'
     });
   }
 });
 
 // 获取指定房间内所有玩家的状态
-router.get('/rooms/:roomId/players', auth, async (req, res) => {
+router.get('/rooms/:roomId/players', authMiddleware, async (req, res) => {
   try {
     const roomId = req.params.roomId;
     const userId = req.user.id;
     
-    // 验证用户是否有权限访问该房间
+    // 验证用户是否在该房间中
     const roomQuery = `
-      SELECT id 
-      FROM rooms 
-      WHERE id = ? AND (creator_id = ? OR id IN (
-        SELECT room_id FROM room_players WHERE user_id = ?
-      ))
+      SELECT r.id 
+      FROM rooms r
+      JOIN players p ON r.id = p.room_id
+      WHERE r.id = ? AND p.user_id = ?
     `;
     
-    const room = db.prepare(roomQuery).get(roomId, userId, userId);
+    const room = db.prepare(roomQuery).get(roomId, userId);
     
     if (!room) {
       return res.status(403).json({
         code: 403,
-        message: 'Access denied to this room'
+        message: '无权访问该房间'
       });
     }
     
-    // 查询房间内所有玩家
+    // 获取房间内所有玩家信息
     const playersQuery = `
       SELECT p.*, u.username 
-      FROM players p 
-      JOIN users u ON p.user_id = u.id 
-      WHERE p.room_id = ? AND p.in_game = true
+      FROM players p
+      JOIN users u ON p.user_id = u.id
+      WHERE p.room_id = ?
+      ORDER BY p.created_at
     `;
     
     const players = db.prepare(playersQuery).all(roomId);
     
-    // 格式化响应数据
-    const playersData = players.map(player => {
-      // 查询每个玩家的地产
-      const propertiesQuery = `
-        SELECT property_id 
-        FROM player_properties 
-        WHERE player_id = ?
-      `;
-      
-      const properties = db.prepare(propertiesQuery).all(player.id);
-      
-      return {
-        id: player.id,
-        user_id: player.user_id,
-        username: player.username,
-        position: player.position,
-        money: player.money,
-        properties: properties.map(p => p.property_id),
-        in_game: player.in_game,
-        is_ready: player.is_ready
-      };
-    });
+    // 构建响应数据
+    const playersData = players.map(player => ({
+      id: player.id,
+      user_id: player.user_id,
+      username: player.username,
+      position: player.position,
+      money: player.money,
+      properties: [], // 这里可以扩展获取地产详情
+      in_game: player.in_game,
+      is_ready: player.is_ready
+    }));
     
     res.json({
       code: 200,
@@ -128,10 +114,10 @@ router.get('/rooms/:roomId/players', auth, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching room players:', error);
+    console.error('获取房间玩家信息错误:', error);
     res.status(500).json({
       code: 500,
-      message: 'Internal server error'
+      message: '服务器内部错误'
     });
   }
 });

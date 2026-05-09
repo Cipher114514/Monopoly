@@ -1,108 +1,100 @@
-const Database = require('better-sqlite3');
-const db = new Database('./backend/data/monopoly.db');
+const { db } = require('../db/connection');
 
 class Card {
-  static create(cardData) {
-    const { type, title, description, effect, position } = cardData;
-    const stmt = db.prepare(`
-      INSERT INTO cards (type, title, description, effect, position, created_at)
+  static async create(cardData) {
+    const { type, title, description, effect, room_id } = cardData;
+    const sql = `
+      INSERT INTO cards (type, title, description, effect, room_id, created_at)
       VALUES (?, ?, ?, ?, ?, datetime('now'))
-    `);
-    const result = stmt.run(type, title, description, effect, position);
-    return result.lastInsertRowid;
+    `;
+    
+    try {
+      const result = db.prepare(sql).run(type, title, description, effect, room_id);
+      return { id: result.lastInsertRowid, ...cardData };
+    } catch (error) {
+      throw new Error(`Failed to create card: ${error.message}`);
+    }
   }
 
-  static findById(id) {
-    const stmt = db.prepare('SELECT * FROM cards WHERE id = ?');
-    return stmt.get(id);
+  static async findById(id) {
+    const sql = 'SELECT * FROM cards WHERE id = ?';
+    try {
+      const card = db.prepare(sql).get(id);
+      return card || null;
+    } catch (error) {
+      throw new Error(`Failed to find card by ID: ${error.message}`);
+    }
   }
 
-  static findByType(type) {
-    const stmt = db.prepare('SELECT * FROM cards WHERE type = ? ORDER BY RANDOM() LIMIT 1');
-    return stmt.get(type);
+  static async findByRoomId(roomId) {
+    const sql = 'SELECT * FROM cards WHERE room_id = ? ORDER BY created_at';
+    try {
+      const cards = db.prepare(sql).all(roomId);
+      return cards;
+    } catch (error) {
+      throw new Error(`Failed to find cards by room ID: ${error.message}`);
+    }
   }
 
-  static findAll() {
-    const stmt = db.prepare('SELECT * FROM cards ORDER BY type, position');
-    return stmt.all();
+  static async drawCard(roomId, cardType, playerId) {
+    const sql = `
+      SELECT * FROM cards 
+      WHERE room_id = ? AND type = ? AND drawn_by_player_id IS NULL
+      ORDER BY RANDOM()
+      LIMIT 1
+    `;
+    
+    try {
+      const card = db.prepare(sql).get(roomId, cardType);
+      
+      if (card) {
+        const updateSql = `
+          UPDATE cards 
+          SET drawn_by_player_id = ?, drawn_at = datetime('now')
+          WHERE id = ?
+        `;
+        db.prepare(updateSql).run(playerId, card.id);
+        return card;
+      }
+      
+      return null;
+    } catch (error) {
+      throw new Error(`Failed to draw card: ${error.message}`);
+    }
   }
 
-  static update(id, cardData) {
-    const { type, title, description, effect, position } = cardData;
-    const stmt = db.prepare(`
+  static async resetCard(id) {
+    const sql = `
       UPDATE cards 
-      SET type = ?, title = ?, description = ?, effect = ?, position = ? 
+      SET drawn_by_player_id = NULL, drawn_at = NULL
       WHERE id = ?
-    `);
-    const result = stmt.run(type, title, description, effect, position, id);
-    return result.changes > 0;
+    `;
+    
+    try {
+      const result = db.prepare(sql).run(id);
+      return result.changes > 0;
+    } catch (error) {
+      throw new Error(`Failed to reset card: ${error.message}`);
+    }
   }
 
-  static delete(id) {
-    const stmt = db.prepare('DELETE FROM cards WHERE id = ?');
-    const result = stmt.run(id);
-    return result.changes > 0;
+  static async getCardHistory(roomId, limit = 10) {
+    const sql = `
+      SELECT c.*, p.username as drawn_by_name
+      FROM cards c
+      JOIN players p ON c.drawn_by_player_id = p.id
+      WHERE c.room_id = ?
+      ORDER BY c.drawn_at DESC
+      LIMIT ?
+    `;
+    try {
+      const history = db.prepare(sql).all(roomId, limit);
+      return history;
+    } catch (error) {
+      throw new Error(`Failed to get card history: ${error.message}`);
+    }
   }
 
-  static drawChanceCard() {
-    return this.findByType('chance');
-  }
-
-  static drawCommunityChestCard() {
-    return this.findByType('community_chest');
-  }
-
-  static getCardsByType(type) {
-    const stmt = db.prepare('SELECT * FROM cards WHERE type = ? ORDER BY position');
-    return stmt.all(type);
-  }
-
-  static executeCardEffect(card, playerId) {
-    const effect = JSON.parse(card.effect);
-    let result = { success: true, message: card.description };
-
-    switch (effect.type) {
-      case 'money':
-        const playerStmt = db.prepare('UPDATE players SET money = money + ? WHERE id = ?');
-        playerStmt.run(effect.amount, playerId);
-        result.message = `You ${effect.amount > 0 ? 'received' : 'paid'} $${Math.abs(effect.amount)}`;
-        break;
-      
-      case 'move':
-        const moveStmt = db.prepare('UPDATE players SET position = ? WHERE id = ?');
-        moveStmt.run(effect.position, playerId);
-        result.message = `You moved to position ${effect.position}`;
-        break;
-      
-      case 'move_to_property':
-        const movePropStmt = db.prepare('UPDATE players SET position = ? WHERE id = ?');
-        movePropStmt.run(effect.position, playerId);
-        result.message = `You moved to ${effect.property_name}`;
-        break;
-      
-      case 'jail':
-        const jailStmt = db.prepare('UPDATE players SET in_jail = 1, jail_turns = 0 WHERE id = ?');
-        jailStmt.run(playerId);
-        result.message = 'You went to jail!';
-        break;
-      
-      case 'get_out_of_jail':
-        const jailFreeStmt = db.prepare('UPDATE players SET in_jail = 0, jail_turns = 0 WHERE id = ?');
-        jailFreeStmt.run(playerId);
-        result.message = 'You got out of jail free!';
-        break;
-      
-      case 'pay_each_player':
-        const roomStmt = db.prepare('SELECT room_id FROM players WHERE id = ?');
-        const room = roomStmt.get(playerId);
-        
-        if (room) {
-          const playersStmt = db.prepare('SELECT id FROM players WHERE room_id = ? AND id != ?');
-          const players = playersStmt.all(room.room_id, playerId);
-          
-          const amountStmt = db.prepare('UPDATE players SET money = money - ? WHERE id = ?');
-          const receiveStmt = db.prepare('UPDATE players SET money = money + ? WHERE id = ?');
-          
-          players.forEach(p => {
-            amountStmt.run(effect.amount, playerId);
-            receiveStmt.run(effect.amount, p.id);
+  static async shuffleCards(roomId) {
+    const sql = `
+      UPDATE cards

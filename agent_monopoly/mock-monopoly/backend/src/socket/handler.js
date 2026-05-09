@@ -1,537 +1,418 @@
 const jwt = require('jsonwebtoken');
-const { v4: uuidv4 } = require('uuid');
-const db = require('../database/connection');
+const { db } = require('../db/connection');
+const User = require('../models/User');
+const Room = require('../models/Room');
+const Player = require('../models/Player');
+const Property = require('../models/Property');
+const Card = require('../models/Card');
+const gameService = require('../services/gameService');
+const roomService = require('../services/roomService');
 
-// 验证用户身份的中间件
-function authenticateUser(socket, next) {
-  const token = socket.handshake.auth.token;
-  
-  if (!token) {
-    return next(new Error('Authentication error: No token provided'));
-  }
-  
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-    socket.userId = decoded.userId;
-    next();
-  } catch (err) {
-    next(new Error('Authentication error: Invalid token'));
-  }
-}
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
-// 处理用户注册
-function handleRegister(socket, data) {
-  return new Promise((resolve, reject) => {
-    const { username, password } = data;
-    
-    // 检查用户名是否已存在
-    const checkUser = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
-    
-    if (checkUser) {
-      reject({ message: 'Username already exists' });
-      return;
+const socketHandler = (io) => {
+  const connectedUsers = new Map(); // userId -> socketId
+
+  io.use((socket, next) => {
+    const token = socket.handshake.auth.token;
+    if (!token) {
+      return next(new Error('Authentication error'));
     }
-    
-    // 创建新用户
-    const insertUser = db.prepare('INSERT INTO users (username, password, created_at) VALUES (?, ?, ?)');
-    const result = insertUser.run(username, password, new Date().toISOString());
-    
-    if (result.changes > 0) {
-      const userId = result.lastInsertRowid;
-      const token = jwt.sign({ userId }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '24h' });
-      
-      resolve({ userId, token });
-    } else {
-      reject({ message: 'Failed to create user' });
+
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      socket.userId = decoded.userId;
+      next();
+    } catch (err) {
+      next(new Error('Authentication error'));
     }
   });
-}
 
-// 处理用户登录
-function handleLogin(socket, data) {
-  return new Promise((resolve, reject) => {
-    const { username, password } = data;
-    
-    const user = db.prepare('SELECT id, password FROM users WHERE username = ?').get(username);
-    
-    if (!user) {
-      reject({ message: 'Invalid username or password' });
-      return;
-    }
-    
-    // 在实际应用中，这里应该使用密码哈希验证
-    if (user.password !== password) {
-      reject({ message: 'Invalid username or password' });
-      return;
-    }
-    
-    const userId = user.id;
-    const token = jwt.sign({ userId }, process.env.JWT_SECRET || 'your-secret-key', { expiresIn: '24h' });
-    
-    // 获取用户信息
-    const userInfo = db.prepare('SELECT id, username, created_at FROM users WHERE id = ?').get(userId);
-    
-    resolve({ userId, token, userInfo });
-  });
-}
+  io.on('connection', (socket) => {
+    console.log(`User ${socket.userId} connected`);
 
-// 处理创建房间
-function handleCreateRoom(socket, data) {
-  return new Promise((resolve, reject) => {
-    const { roomName } = data;
-    const roomId = uuidv4();
-    
-    // 创建房间
-    const insertRoom = db.prepare(`
-      INSERT INTO rooms (id, name, created_by, created_at, status, max_players)
-      VALUES (?, ?, ?, ?, 'waiting', 6)
-    `);
-    
-    const result = insertRoom.run(roomId, roomName, socket.userId, new Date().toISOString());
-    
-    if (result.changes > 0) {
-      // 创建者自动加入房间
-      handleJoinRoom(socket, { roomId })
-        .then(roomInfo => {
-          resolve({ roomId, roomInfo });
-        })
-        .catch(err => {
-          reject(err);
-        });
-    } else {
-      reject({ message: 'Failed to create room' });
-    }
-  });
-}
+    // Store socket ID for user
+    connectedUsers.set(socket.userId, socket.id);
 
-// 处理加入房间
-function handleJoinRoom(socket, data) {
-  return new Promise((resolve, reject) => {
-    const { roomId } = data;
-    
-    // 检查房间是否存在
-    const room = db.prepare('SELECT * FROM rooms WHERE id = ?').get(roomId);
-    
-    if (!room) {
-      reject({ message: 'Room not found' });
-      return;
-    }
-    
-    // 检查房间是否已满
-    const playerCount = db.prepare('SELECT COUNT(*) as count FROM room_players WHERE room_id = ?').get(roomId).count;
-    
-    if (playerCount >= room.max_players) {
-      reject({ message: 'Room is full' });
-      return;
-    }
-    
-    // 检查用户是否已在房间中
-    const existingPlayer = db.prepare('SELECT id FROM room_players WHERE room_id = ? AND user_id = ?').get(roomId, socket.userId);
-    
-    if (existingPlayer) {
-      reject({ message: 'You are already in this room' });
-      return;
-    }
-    
-    // 添加玩家到房间
-    const insertPlayer = db.prepare(`
-      INSERT INTO room_players (room_id, user_id, joined_at, is_ready)
-      VALUES (?, ?, ?, 0)
-    `);
-    
-    const result = insertPlayer.run(roomId, socket.userId, new Date().toISOString());
-    
-    if (result.changes > 0) {
-      // 获取房间信息
-      const roomInfo = getRoomInfo(roomId);
-      resolve(roomInfo);
-    } else {
-      reject({ message: 'Failed to join room' });
-    }
-  });
-}
-
-// 处理离开房间
-function handleLeaveRoom(socket, data) {
-  return new Promise((resolve, reject) => {
-    const { roomId } = data;
-    
-    // 检查用户是否在房间中
-    const player = db.prepare('SELECT id FROM room_players WHERE room_id = ? AND user_id = ?').get(roomId, socket.userId);
-    
-    if (!player) {
-      reject({ message: 'You are not in this room' });
-      return;
-    }
-    
-    // 从房间中移除玩家
-    const deletePlayer = db.prepare('DELETE FROM room_players WHERE room_id = ? AND user_id = ?');
-    const result = deletePlayer.run(roomId, socket.userId);
-    
-    if (result.changes > 0) {
-      // 如果房间为空，删除房间
-      const remainingPlayers = db.prepare('SELECT COUNT(*) as count FROM room_players WHERE room_id = ?').get(roomId).count;
-      
-      if (remainingPlayers === 0) {
-        db.prepare('DELETE FROM rooms WHERE id = ?').run(roomId);
-      }
-      
-      resolve({ roomId });
-    } else {
-      reject({ message: 'Failed to leave room' });
-    }
-  });
-}
-
-// 处理切换准备状态
-function handleToggleReady(socket, data) {
-  return new Promise((resolve, reject) => {
-    const { roomId } = data;
-    
-    // 检查用户是否在房间中
-    const player = db.prepare('SELECT id, is_ready FROM room_players WHERE room_id = ? AND user_id = ?').get(roomId, socket.userId);
-    
-    if (!player) {
-      reject({ message: 'You are not in this room' });
-      return;
-    }
-    
-    // 切换准备状态
-    const newReadyStatus = player.is_ready ? 0 : 1;
-    const updatePlayer = db.prepare('UPDATE room_players SET is_ready = ? WHERE room_id = ? AND user_id = ?');
-    const result = updatePlayer.run(newReadyStatus, roomId, socket.userId);
-    
-    if (result.changes > 0) {
-      // 获取房间信息
-      const roomInfo = getRoomInfo(roomId);
-      
-      // 检查是否所有玩家都准备好了
-      const allPlayers = db.prepare('SELECT is_ready FROM room_players WHERE room_id = ?').all(roomId);
-      const allReady = allPlayers.every(p => p.is_ready === 1);
-      
-      resolve({ 
-        roomId, 
-        roomInfo, 
-        allPlayersReady: allReady 
-      });
-    } else {
-      reject({ message: 'Failed to update ready status' });
-    }
-  });
-}
-
-// 处理开始游戏
-function handleStartGame(socket, data) {
-  return new Promise((resolve, reject) => {
-    const { roomId } = data;
-    
-    // 检查用户是否在房间中
-    const player = db.prepare('SELECT id FROM room_players WHERE room_id = ? AND user_id = ?').get(roomId, socket.userId);
-    
-    if (!player) {
-      reject({ message: 'You are not in this room' });
-      return;
-    }
-    
-    // 检查房间状态是否为等待中
-    const room = db.prepare('SELECT status, max_players FROM rooms WHERE id = ?').get(roomId);
-    
-    if (room.status !== 'waiting') {
-      reject({ message: 'Game is already in progress' });
-      return;
-    }
-    
-    // 检查是否所有玩家都准备好了
-    const allPlayers = db.prepare('SELECT is_ready FROM room_players WHERE room_id = ?').all(roomId);
-    const allReady = allPlayers.every(p => p.is_ready === 1);
-    
-    if (!allReady) {
-      reject({ message: 'Not all players are ready' });
-      return;
-    }
-    
-    // 更新房间状态为游戏中
-    const updateRoom = db.prepare('UPDATE rooms SET status = ? WHERE id = ?');
-    updateRoom.run('playing', roomId);
-    
-    // 初始化游戏状态
-    initializeGame(roomId)
-      .then(gameState => {
-        resolve({ roomId, gameState });
-      })
-      .catch(err => {
-        reject(err);
-      });
-  });
-}
-
-// 初始化游戏
-function initializeGame(roomId) {
-  return new Promise((resolve, reject) => {
-    // 获取房间中的所有玩家
-    const players = db.prepare(`
-      SELECT u.id, u.username, rp.joined_at
-      FROM room_players rp
-      JOIN users u ON rp.user_id = u.id
-      WHERE rp.room_id = ?
-      ORDER BY rp.joined_at
-    `).all(roomId);
-    
-    if (players.length < 2) {
-      reject({ message: 'At least 2 players are required to start the game' });
-      return;
-    }
-    
-    // 为每个玩家创建游戏状态
-    const insertPlayerState = db.prepare(`
-      INSERT INTO game_states (room_id, user_id, position, money, in_game, created_at)
-      VALUES (?, ?, 0, 1500, 1, ?)
-    `);
-    
-    for (const player of players) {
-      insertPlayerState.run(roomId, player.id, new Date().toISOString());
-    }
-    
-    // 获取初始化后的游戏状态
-    const gameState = getGameState(roomId);
-    resolve(gameState);
-  });
-}
-
-// 获取房间信息
-function getRoomInfo(roomId) {
-  // 获取房间基本信息
-  const room = db.prepare('SELECT * FROM rooms WHERE id = ?').get(roomId);
-  
-  if (!room) {
-    return null;
-  }
-  
-  // 获取房间中的玩家
-  const players = db.prepare(`
-    SELECT u.id, u.username, rp.is_ready, rp.joined_at
-    FROM room_players rp
-    JOIN users u ON rp.user_id = u.id
-    WHERE rp.room_id = ?
-    ORDER BY rp.joined_at
-  `).all(roomId);
-  
-  // 获取游戏状态（如果游戏已经开始）
-  let gameState = null;
-  if (room.status === 'playing') {
-    gameState = getGameState(roomId);
-  }
-  
-  return {
-    ...room,
-    players,
-    gameState
-  };
-}
-
-// 获取游戏状态
-function getGameState(roomId) {
-  // 获取所有玩家的游戏状态
-  const playerStates = db.prepare(`
-    SELECT u.id, u.username, gs.position, gs.money, gs.in_game
-    FROM game_states gs
-    JOIN users u ON gs.user_id = u.id
-    WHERE gs.room_id = ?
-    ORDER BY gs.id
-  `).all(roomId);
-  
-  // 获取所有地产的所有权
-  const properties = db.prepare(`
-    SELECT p.id, p.name, p.price, p.rent, p.owner_id, p.house_count
-    FROM properties p
-    LEFT JOIN property_ownership po ON p.id = po.property_id AND po.room_id = ?
-    WHERE po.room_id = ?
-  `).all(roomId, roomId);
-  
-  // 获取当前回合的玩家
-  const currentTurn = db.prepare('SELECT current_turn_user_id FROM game_turns WHERE room_id = ?').get(roomId);
-  
-  return {
-    players: playerStates,
-    properties,
-    currentTurn: currentTurn ? currentTurn.current_turn_user_id : null
-  };
-}
-
-// 处理掷骰子
-function handleRollDice(socket, data) {
-  return new Promise((resolve, reject) => {
-    const { roomId } = data;
-    
-    // 检查用户是否在房间中
-    const player = db.prepare('SELECT id FROM room_players WHERE room_id = ? AND user_id = ?').get(roomId, socket.userId);
-    
-    if (!player) {
-      reject({ message: 'You are not in this room' });
-      return;
-    }
-    
-    // 检查游戏是否正在进行
-    const room = db.prepare('SELECT status FROM rooms WHERE id = ?').get(roomId);
-    
-    if (room.status !== 'playing') {
-      reject({ message: 'Game is not in progress' });
-      return;
-    }
-    
-    // 检查是否是当前玩家的回合
-    const currentTurn = db.prepare('SELECT current_turn_user_id FROM game_turns WHERE room_id = ?').get(roomId);
-    
-    if (currentTurn.current_turn_user_id !== socket.userId) {
-      reject({ message: 'It is not your turn' });
-      return;
-    }
-    
-    // 生成1-6的随机数
-    const diceValue = Math.floor(Math.random() * 6) + 1;
-    
-    // 更新玩家位置
-    const playerState = db.prepare('SELECT position, money FROM game_states WHERE room_id = ? AND user_id = ?').get(roomId, socket.userId);
-    
-    let newPosition = playerState.position + diceValue;
-    
-    // 如果经过起点，给予奖励
-    if (newPosition >= 40) {
-      newPosition = newPosition % 40;
-      
-      // 给予200元起点奖励
-      const updateMoney = db.prepare('UPDATE game_states SET money = money + 200 WHERE room_id = ? AND user_id = ?');
-      updateMoney.run(roomId, socket.userId);
-    }
-    
-    // 更新玩家位置
-    const updatePosition = db.prepare('UPDATE game_states SET position = ? WHERE room_id = ? AND user_id = ?');
-    updatePosition.run(newPosition, roomId, socket.userId);
-    
-    // 检查是否落在地产上
-    const property = db.prepare('SELECT * FROM properties WHERE position = ?').get(newPosition);
-    
-    if (property) {
-      // 检查地产是否已被拥有
-      const ownership = db.prepare('SELECT owner_id FROM property_ownership WHERE room_id = ? AND property_id = ?').get(roomId, property.id);
-      
-      if (ownership && ownership.owner_id !== socket.userId) {
-        // 计算租金
-        let rent = property.rent;
+    // Register user
+    socket.on('register', async (data) => {
+      try {
+        const { username, password } = data;
         
-        // 如果有房屋，增加租金
-        const houseCount = db.prepare('SELECT house_count FROM property_ownership WHERE room_id = ? AND property_id = ?').get(roomId, property.id).house_count || 0;
-        rent = rent * Math.pow(2, houseCount);
-        
-        // 检查玩家是否有足够资金支付租金
-        const payerMoney = db.prepare('SELECT money FROM game_states WHERE room_id = ? AND user_id = ?').get(roomId, socket.userId).money;
-        
-        if (payerMoney >= rent) {
-          // 支付租金
-          const updatePayerMoney = db.prepare('UPDATE game_states SET money = money - ? WHERE room_id = ? AND user_id = ?');
-          updatePayerMoney.run(rent, roomId, socket.userId);
-          
-          const updateOwnerMoney = db.prepare('UPDATE game_states SET money = money + ? WHERE room_id = ? AND user_id = ?');
-          updateOwnerMoney.run(rent, roomId, ownership.owner_id);
-          
-          // 记录租金支付
-          const insertRentRecord = db.prepare(`
-            INSERT INTO rent_records (room_id, property_id, payer_id, receiver_id, amount, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-          `);
-          insertRentRecord.run(roomId, property.id, socket.userId, ownership.owner_id, rent, new Date().toISOString());
-          
-          resolve({
-            roomId,
-            diceValue,
-            newPosition,
-            rentPaid: {
-              amount: rent,
-              propertyId: property.id,
-              fromUserId: socket.userId,
-              toUserId: ownership.owner_id
-            }
-          });
-        } else {
-          // 玩家破产
-          handleBankruptcy(socket, { roomId, reason: 'insufficient_funds' })
-            .then(() => {
-              resolve({
-                roomId,
-                diceValue,
-                newPosition,
-                bankruptcy: {
-                  userId: socket.userId,
-                  reason: 'insufficient_funds'
-                }
-              });
-            })
-            .catch(err => {
-              reject(err);
-            });
+        // Check if user already exists
+        const existingUser = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
+        if (existingUser) {
+          socket.emit('register_error', { message: 'Username already exists' });
+          return;
         }
-      } else {
-        resolve({
-          roomId,
-          diceValue,
-          newPosition,
-          propertyAvailable: property.id
-        });
-      }
-    } else {
-      resolve({
-        roomId,
-        diceValue,
-        newPosition
-      });
-    }
-  });
-}
 
-// 处理购买地产
-function handleBuyProperty(socket, data) {
-  return new Promise((resolve, reject) => {
-    const { roomId, propertyId } = data;
-    
-    // 检查用户是否在房间中
-    const player = db.prepare('SELECT id FROM room_players WHERE room_id = ? AND user_id = ?').get(roomId, socket.userId);
-    
-    if (!player) {
-      reject({ message: 'You are not in this room' });
-      return;
-    }
-    
-    // 检查游戏是否正在进行
-    const room = db.prepare('SELECT status FROM rooms WHERE id = ?').get(roomId);
-    
-    if (room.status !== 'playing') {
-      reject({ message: 'Game is not in progress' });
-      return;
-    }
-    
-    // 检查是否是当前玩家的回合
-    const currentTurn = db.prepare('SELECT current_turn_user_id FROM game_turns WHERE room_id = ?').get(roomId);
-    
-    if (currentTurn.current_turn_user_id !== socket.userId) {
-      reject({ message: 'It is not your turn' });
-      return;
-    }
-    
-    // 检查地产是否存在
-    const property = db.prepare('SELECT * FROM properties WHERE id = ?').get(propertyId);
-    
-    if (!property) {
-      reject({ message: 'Property not found' });
-      return;
-    }
-    
-    // 检查玩家是否已经拥有该地产
-    const ownership = db.prepare('SELECT owner_id FROM property_ownership WHERE room_id = ? AND property_id = ?').get(roomId, propertyId);
-    
-    if (ownership && ownership.owner_id === socket.userId) {
-      reject({ message: 'You already own this property' });
-      return;
-    }
-    
-    // 检查玩家是否有足够资金购买
-    const playerMoney = db.prepare
+        // Create new user
+        const stmt = db.prepare('INSERT INTO users (username, password) VALUES (?, ?)');
+        const result = stmt.run(username, password);
+        
+        const token = jwt.sign({ userId: result.lastInsertRowid }, JWT_SECRET);
+        
+        socket.emit('register_success', { 
+          userId: result.lastInsertRowid, 
+          token,
+          username 
+        });
+      } catch (error) {
+        console.error('Registration error:', error);
+        socket.emit('register_error', { message: 'Registration failed' });
+      }
+    });
+
+    // Login user
+    socket.on('login', async (data) => {
+      try {
+        const { username, password } = data;
+        
+        const user = db.prepare('SELECT * FROM users WHERE username = ? AND password = ?').get(username, password);
+        
+        if (!user) {
+          socket.emit('login_error', { message: 'Invalid credentials' });
+          return;
+        }
+
+        const token = jwt.sign({ userId: user.id }, JWT_SECRET);
+        
+        socket.emit('login_success', { 
+          userId: user.id, 
+          token,
+          userInfo: { username: user.username }
+        });
+      } catch (error) {
+        console.error('Login error:', error);
+        socket.emit('login_error', { message: 'Login failed' });
+      }
+    });
+
+    // Create room
+    socket.on('create_room', async (data) => {
+      try {
+        const { roomName } = data;
+        const userId = socket.userId;
+        
+        const room = await roomService.createRoom(roomName, userId);
+        
+        // Add user to the room as a player
+        await roomService.joinRoom(room.id, userId);
+        
+        socket.join(room.id);
+        socket.emit('room_created', { roomId: room.id, roomInfo: room });
+        
+        // Update room list for all clients
+        const rooms = await roomService.getAllRooms();
+        io.emit('room_list_updated', { rooms });
+      } catch (error) {
+        console.error('Create room error:', error);
+        socket.emit('error', { code: 'CREATE_ROOM_ERROR', message: 'Failed to create room' });
+      }
+    });
+
+    // Join room
+    socket.on('join_room', async (data) => {
+      try {
+        const { roomId } = data;
+        const userId = socket.userId;
+        
+        const room = await roomService.joinRoom(roomId, userId);
+        
+        socket.join(roomId);
+        socket.emit('room_joined', { roomId, roomInfo: room });
+        
+        // Notify other players in the room
+        socket.to(roomId).emit('player_joined', { 
+          userId, 
+          username: db.prepare('SELECT username FROM users WHERE id = ?').get(userId).username 
+        });
+        
+        // Update room list for all clients
+        const rooms = await roomService.getAllRooms();
+        io.emit('room_list_updated', { rooms });
+      } catch (error) {
+        console.error('Join room error:', error);
+        socket.emit('error', { code: 'JOIN_ROOM_ERROR', message: 'Failed to join room' });
+      }
+    });
+
+    // Leave room
+    socket.on('leave_room', async (data) => {
+      try {
+        const { roomId } = data;
+        const userId = socket.userId;
+        
+        await roomService.leaveRoom(roomId, userId);
+        
+        socket.leave(roomId);
+        socket.emit('room_left', { roomId });
+        
+        // Notify other players in the room
+        socket.to(roomId).emit('player_left', { userId });
+        
+        // Update room list for all clients
+        const rooms = await roomService.getAllRooms();
+        io.emit('room_list_updated', { rooms });
+      } catch (error) {
+        console.error('Leave room error:', error);
+        socket.emit('error', { code: 'LEAVE_ROOM_ERROR', message: 'Failed to leave room' });
+      }
+    });
+
+    // Toggle ready
+    socket.on('toggle_ready', async (data) => {
+      try {
+        const { roomId } = data;
+        const userId = socket.userId;
+        
+        const room = await roomService.toggleReady(roomId, userId);
+        
+        socket.to(roomId).emit('player_ready_updated', { userId, isReady: room.players.find(p => p.userId === userId).isReady });
+        
+        // Check if all players are ready
+        const allReady = room.players.every(player => player.isReady);
+        if (allReady && room.players.length >= 2) {
+          io.to(roomId).emit('all_players_ready', { canStart: true });
+        }
+      } catch (error) {
+        console.error('Toggle ready error:', error);
+        socket.emit('error', { code: 'TOGGLE_READY_ERROR', message: 'Failed to toggle ready status' });
+      }
+    });
+
+    // Start game
+    socket.on('start_game', async (data) => {
+      try {
+        const { roomId } = data;
+        const userId = socket.userId;
+        
+        const room = await roomService.startGame(roomId);
+        
+        // Initialize game state
+        const gameState = await gameService.initializeGame(roomId);
+        
+        io.to(roomId).emit('game_started', { gameState });
+      } catch (error) {
+        console.error('Start game error:', error);
+        socket.emit('error', { code: 'START_GAME_ERROR', message: 'Failed to start game' });
+      }
+    });
+
+    // Roll dice
+    socket.on('roll_dice', async (data) => {
+      try {
+        const { roomId } = data;
+        const userId = socket.userId;
+        
+        const result = await gameService.rollDice(roomId, userId);
+        
+        io.to(roomId).emit('dice_rolled', { userId, value: result.diceValue });
+        
+        // Move player after a short delay
+        setTimeout(async () => {
+          const moveResult = await gameService.movePlayer(roomId, userId, result.diceValue);
+          
+          io.to(roomId).emit('player_moved', { 
+            userId, 
+            newPosition: moveResult.newPosition, 
+            diceValue: result.diceValue 
+          });
+          
+          // Handle landing on property
+          if (moveResult.landedOnProperty) {
+            const property = moveResult.landedOnProperty;
+            
+            if (property.ownerId === null) {
+              // Property is available for purchase
+              io.to(roomId).emit('property_available', { 
+                propertyId: property.id, 
+                propertyInfo: property 
+              });
+            } else if (property.ownerId !== userId) {
+              // Property is owned by another player
+              const rentAmount = gameService.calculateRent(property);
+              const rentResult = await gameService.payRent(roomId, userId, property.ownerId, rentAmount, property.id);
+              
+              io.to(roomId).emit('rent_paid', { 
+                fromUserId: userId, 
+                toUserId: property.ownerId, 
+                amount: rentAmount, 
+                propertyId: property.id 
+              });
+              
+              // Check if player is bankrupt after paying rent
+              if (rentResult.payerBankrupted) {
+                io.to(roomId).emit('player_bankrupted', { userId: rentResult.payerId });
+                
+                // Check if game should end
+                const remainingPlayers = await gameService.getRemainingPlayers(roomId);
+                if (remainingPlayers.length === 1) {
+                  const winner = remainingPlayers[0];
+                  const gameStats = await gameService.getGameStats(roomId);
+                  io.to(roomId).emit('game_ended', { winner, gameStats });
+                }
+              }
+            }
+          }
+          
+          // Handle chance/community cards
+          if (moveResult.drawCard) {
+            const card = moveResult.drawCard;
+            io.to(roomId).emit('card_drawn', { cardInfo: card });
+            
+            // Execute card effect after a short delay
+            setTimeout(async () => {
+              const effectResult = await gameService.executeCardEffect(roomId, userId, card);
+              
+              io.to(roomId).emit('card_effect', { 
+                effectType: effectResult.type, 
+                effectData: effectResult.data 
+              });
+              
+              // Check if card effect caused bankruptcy
+              if (effectResult.playerBankrupted) {
+                io.to(roomId).emit('player_bankrupted', { userId: effectResult.playerId });
+                
+                // Check if game should end
+                const remainingPlayers = await gameService.getRemainingPlayers(roomId);
+                if (remainingPlayers.length === 1) {
+                  const winner = remainingPlayers[0];
+                  const gameStats = await gameService.getGameStats(roomId);
+                  io.to(roomId).emit('game_ended', { winner, gameStats });
+                }
+              }
+            }, 2000);
+          }
+          
+          // End turn after handling all effects
+          setTimeout(async () => {
+            const nextPlayer = await gameService.endTurn(roomId);
+            io.to(roomId).emit('turn_changed', { currentUserId: nextPlayer.userId });
+          }, 3000);
+          
+        }, 1000);
+      } catch (error) {
+        console.error('Roll dice error:', error);
+        socket.emit('error', { code: 'ROLL_DICE_ERROR', message: 'Failed to roll dice' });
+      }
+    });
+
+    // Buy property
+    socket.on('buy_property', async (data) => {
+      try {
+        const { roomId, propertyId } = data;
+        const userId = socket.userId;
+        
+        const result = await gameService.buyProperty(roomId, userId, propertyId);
+        
+        io.to(roomId).emit('property_purchased', { 
+          propertyId, 
+          ownerId: userId 
+        });
+      } catch (error) {
+        console.error('Buy property error:', error);
+        socket.emit('error', { code: 'BUY_PROPERTY_ERROR', message: 'Failed to buy property' });
+      }
+    });
+
+    // Build house
+    socket.on('build_house', async (data) => {
+      try {
+        const { roomId, propertyId } = data;
+        const userId = socket.userId;
+        
+        const result = await gameService.buildHouse(roomId, userId, propertyId);
+        
+        io.to(roomId).emit('house_built', { 
+          propertyId, 
+          houseCount: result.houseCount 
+        });
+      } catch (error) {
+        console.error('Build house error:', error);
+        socket.emit('error', { code: 'BUILD_HOUSE_ERROR', message: 'Failed to build house' });
+      }
+    });
+
+    // Draw card
+    socket.on('draw_card', async (data) => {
+      try {
+        const { roomId } = data;
+        const userId = socket.userId;
+        
+        const card = await gameService.drawCard(roomId, userId);
+        
+        io.to(roomId).emit('card_drawn', { cardInfo: card });
+      } catch (error) {
+        console.error('Draw card error:', error);
+        socket.emit('error', { code: 'DRAW_CARD_ERROR', message: 'Failed to draw card' });
+      }
+    });
+
+    // Bankrupt
+    socket.on('bankrupt', async (data) => {
+      try {
+        const { roomId } = data;
+        const userId = socket.userId;
+        
+        await gameService.declareBankruptcy(roomId, userId);
+        
+        io.to(roomId).emit('bankruptcy_declared', { userId, reason: 'Player declared bankruptcy' });
+        io.to(roomId).emit('player_bankrupted', { userId });
+        
+        // Check if game should end
+        const remainingPlayers = await gameService.getRemainingPlayers(roomId);
+        if (remainingPlayers.length === 1) {
+          const winner = remainingPlayers[0];
+          const gameStats = await gameService.getGameStats(roomId);
+          io.to(roomId).emit('game_ended', { winner, gameStats });
+        }
+      } catch (error) {
+        console.error('Bankrupt error:', error);
+        socket.emit('error', { code: 'BANKRUPT_ERROR', message: 'Failed to declare bankruptcy' });
+      }
+    });
+
+    // Send message
+    socket.on('send_message', async (data) => {
+      try {
+        const { roomId, message } = data;
+        const userId = socket.userId;
+        
+        const user = db.prepare('SELECT username FROM users WHERE id = ?').get(userId);
+        
+        const messageData = {
+          userId,
+          username: user.username,
+          message,
+          timestamp: new Date().toISOString()
+        };
+        
+        // Save message to database if needed
+        // const stmt = db.prepare('INSERT INTO messages (room_id, user_id, message, timestamp) VALUES (?, ?, ?, ?)');
+        // stmt.run(roomId, userId, message, new Date().toISOString());
+        
+        io.to(roomId).emit('message_received', messageData);
+      } catch (error) {
+        console.error('Send message error:', error);
+        socket.emit('error', { code: 'SEND_MESSAGE_ERROR', message: 'Failed to send message' });
+      }
+    });
+
+    // Disconnect
+    socket.on('disconnect', () => {
+      console.log(`User ${socket.userId} disconnected`);
+      
+      // Remove user from connected users
+      connectedUsers.delete(socket.userId);
+      
+      // Handle room cleanup if needed
+      // This could include notifying other players, handling timeouts, etc.
+    });
+  });
+
+  return io;
+};
+
+module.exports = socketHandler;
+```

@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { Toaster } from 'react-hot-toast';
 import { useAuth } from './hooks/useAuth';
 import { useSocket } from './hooks/useSocket';
 import Header from './components/layout/Header';
@@ -13,35 +12,25 @@ import GamePage from './pages/GamePage';
 import GameOverPage from './pages/GameOverPage';
 
 function App() {
-  const { user, loading } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const socket = useSocket();
-
-  useEffect(() => {
-    if (socket) {
-      // Socket event listeners can be added here
-    }
-  }, [socket]);
-
-  if (loading) {
-    return <div className="loading-screen">Loading...</div>;
-  }
 
   return (
     <Router>
       <div className="app-container">
-        <Header />
+        {isAuthenticated && <Header />}
         <main className="main-content">
           <Routes>
-            <Route path="/" element={user ? <Navigate to="/lobby" /> : <LoginPage />} />
-            <Route path="/register" element={user ? <Navigate to="/lobby" /> : <RegisterPage />} />
-            <Route path="/lobby" element={user ? <LobbyPage /> : <Navigate to="/" />} />
-            <Route path="/room/:roomId" element={user ? <RoomPage /> : <Navigate to="/" />} />
-            <Route path="/game/:roomId" element={user ? <GamePage /> : <Navigate to="/" />} />
-            <Route path="/game-over" element={user ? <GameOverPage /> : <Navigate to="/" />} />
+            <Route path="/" element={<Navigate to="/lobby" replace />} />
+            <Route path="/login" element={!isAuthenticated ? <LoginPage /> : <Navigate to="/lobby" replace />} />
+            <Route path="/register" element={!isAuthenticated ? <RegisterPage /> : <Navigate to="/lobby" replace />} />
+            <Route path="/lobby" element={isAuthenticated ? <LobbyPage /> : <Navigate to="/login" replace />} />
+            <Route path="/room/:roomId" element={isAuthenticated ? <RoomPage /> : <Navigate to="/login" replace />} />
+            <Route path="/game/:roomId" element={isAuthenticated ? <GamePage /> : <Navigate to="/login" replace />} />
+            <Route path="/game-over/:roomId" element={isAuthenticated ? <GameOverPage /> : <Navigate to="/login" replace />} />
           </Routes>
         </main>
-        <Footer />
-        <Toaster position="top-right" />
+        {isAuthenticated && <Footer />}
       </div>
     </Router>
   );

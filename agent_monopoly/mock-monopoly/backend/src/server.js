@@ -3,89 +3,93 @@ const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
 const path = require('path');
-require('dotenv').config();
 
-// Import routes
-const authRoutes = require('./routes/auth');
-const roomRoutes = require('./routes/rooms');
-const gameRoutes = require('./routes/game');
+// 导入数据库连接
+const { db, initializeDatabase } = require('./db/connection');
 
-// Import middleware
+// 导入中间件
 const authMiddleware = require('./middleware/auth');
 
-// Import socket handlers
-const roomHandlers = require('./socketHandlers/roomHandlers');
-const gameHandlers = require('./socketHandlers/gameHandlers');
-const propertyHandlers = require('./socketHandlers/propertyHandlers');
-const cardHandlers = require('./socketHandlers/cardHandlers');
+// 导入路由
+const authRoutes = require('./routes/users');
+const roomRoutes = require('./routes/rooms');
+const playerRoutes = require('./routes/players');
+const propertyRoutes = require('./routes/properties');
+const cardRoutes = require('./routes/cards');
 
-// Import database connection
-const { connectDatabase } = require('./database');
+// 导入Socket处理器
+const socketHandler = require('./socket/handler');
 
+// 创建Express应用
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
+    origin: "http://localhost:5173", // 前端地址
     methods: ["GET", "POST"]
   }
 });
 
-// Connect to database
-connectDatabase();
-
-// Middleware
+// 中间件配置
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
 
-// API Routes
+// 路由配置
 app.use('/api/auth', authRoutes);
-app.use('/api/rooms', roomMiddleware, roomRoutes);
-app.use('/api/game', authMiddleware, gameRoutes);
+app.use('/api/rooms', roomRoutes);
+app.use('/api/players', playerRoutes);
+app.use('/api/properties', propertyRoutes);
+app.use('/api/cards', cardRoutes);
 
-// Socket.io connection handling
+// 健康检查端点
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+});
+
+// Socket.io连接处理
 io.on('connection', (socket) => {
-  console.log('New client connected:', socket.id);
-
-  // Room handlers
-  socket.on('createRoom', (data) => roomHandlers.createRoom(socket, data, io));
-  socket.on('joinRoom', (data) => roomHandlers.joinRoom(socket, data, io));
-  socket.on('leaveRoom', (data) => roomHandlers.leaveRoom(socket, data, io));
-  socket.on('toggleReady', (data) => roomHandlers.toggleReady(socket, data, io));
-  socket.on('startGame', (data) => roomHandlers.startGame(socket, data, io));
-
-  // Game handlers
-  socket.on('rollDice', (data) => gameHandlers.rollDice(socket, data, io));
-  socket.on('movePlayer', (data) => gameHandlers.movePlayer(socket, data, io));
-  socket.on('endTurn', (data) => gameHandlers.endTurn(socket, data, io));
-
-  // Property handlers
-  socket.on('buyProperty', (data) => propertyHandlers.buyProperty(socket, data, io));
-  socket.on('payRent', (data) => propertyHandlers.payRent(socket, data, io));
-  socket.on('buildHouse', (data) => propertyHandlers.buildHouse(socket, data, io));
-
-  // Card handlers
-  socket.on('drawCard', (data) => cardHandlers.drawCard(socket, data, io));
-  socket.on('executeCardEffect', (data) => cardHandlers.executeCardEffect(socket, data, io));
-
-  // Disconnect handler
+  console.log('用户连接:', socket.id);
+  
+  // 使用统一的Socket处理器
+  socketHandler(socket, io);
+  
   socket.on('disconnect', () => {
-    console.log('Client disconnected:', socket.id);
-    // Handle player leaving game/room on disconnect
-    roomHandlers.handleDisconnect(socket, io);
+    console.log('用户断开连接:', socket.id);
   });
 });
 
-// Error handling middleware
+// 错误处理中间件
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).json({ message: 'Something went wrong!' });
+  res.status(500).json({ error: '服务器内部错误' });
 });
 
-// Start server
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// 404处理
+app.use((req, res) => {
+  res.status(404).json({ error: '请求的资源不存在' });
 });
+
+// 初始化数据库并启动服务器
+const PORT = process.env.PORT || 3000;
+
+const startServer = async () => {
+  try {
+    // 初始化数据库
+    await initializeDatabase();
+    console.log('数据库初始化成功');
+    
+    // 启动服务器
+    server.listen(PORT, () => {
+      console.log(`服务器运行在端口 ${PORT}`);
+    });
+  } catch (error) {
+    console.error('服务器启动失败:', error);
+    process.exit(1);
+  }
+};
+
+startServer();
+
+module.exports = { app, server, io };
 ```
