@@ -1,0 +1,173 @@
+import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import api from '../api/client';
+import { useAuth } from '../hooks/useAuth';
+import Modal from './Modal';
+
+const Register = () => {
+  const [formData, setFormData] = useState({
+    username: '',
+    email: '',
+    password: '',
+    confirmPassword: ''
+  });
+  const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const { login } = useAuth();
+  const navigate = useNavigate();
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
+  const validateForm = () => {
+    if (!formData.username || formData.username.length < 3 || formData.username.length > 20) {
+      setError('用户名必须在3-20个字符之间');
+      return false;
+    }
+    
+    if (!formData.email || !/\S+@\S+\.\S+/.test(formData.email)) {
+      setError('请输入有效的邮箱地址');
+      return false;
+    }
+    
+    if (!formData.password || formData.password.length < 6) {
+      setError('密码至少需要6个字符');
+      return false;
+    }
+    
+    if (formData.password !== formData.confirmPassword) {
+      setError('两次输入的密码不一致');
+      return false;
+    }
+    
+    return true;
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    
+    if (!validateForm()) return;
+    
+    setIsLoading(true);
+    setError('');
+    
+    try {
+      // 调用注册API
+      const response = await api.register(formData.username, formData.email, formData.password);
+      
+      if (response.code === 201) {
+        // 注册成功，自动登录
+        const loginResponse = await api.login(formData.username, formData.password);
+        
+        if (loginResponse.code === 200) {
+          // 设置认证状态
+          login(loginResponse.data.token, loginResponse.data.user);
+          setShowModal(true);
+          
+          // 2秒后跳转到首页
+          setTimeout(() => {
+            navigate('/');
+          }, 2000);
+        }
+      } else {
+        setError(response.message || '注册失败，请稍后重试');
+      }
+    } catch (err) {
+      console.error('注册错误:', err);
+      setError('网络错误，请检查连接后重试');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="auth-container">
+      <div className="auth-form">
+        <h2>注册账号</h2>
+        
+        {error && (
+          <div className="error-message">
+            {error}
+          </div>
+        )}
+        
+        <form onSubmit={handleSubmit}>
+          <div className="form-group">
+            <label htmlFor="username">用户名</label>
+            <input
+              type="text"
+              id="username"
+              name="username"
+              value={formData.username}
+              onChange={handleChange}
+              disabled={isLoading}
+              placeholder="请输入用户名（3-20个字符）"
+            />
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="email">邮箱</label>
+            <input
+              type="email"
+              id="email"
+              name="email"
+              value={formData.email}
+              onChange={handleChange}
+              disabled={isLoading}
+              placeholder="请输入邮箱地址"
+            />
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="password">密码</label>
+            <input
+              type="password"
+              id="password"
+              name="password"
+              value={formData.password}
+              onChange={handleChange}
+              disabled={isLoading}
+              placeholder="请输入密码（至少6个字符）"
+            />
+          </div>
+          
+          <div className="form-group">
+            <label htmlFor="confirmPassword">确认密码</label>
+            <input
+              type="password"
+              id="confirmPassword"
+              name="confirmPassword"
+              value={formData.confirmPassword}
+              onChange={handleChange}
+              disabled={isLoading}
+              placeholder="请再次输入密码"
+            />
+          </div>
+          
+          <button type="submit" disabled={isLoading} className="auth-button">
+            {isLoading ? '注册中...' : '注册'}
+          </button>
+        </form>
+        
+        <div className="auth-links">
+          已有账号？<a href="/login">立即登录</a>
+        </div>
+      </div>
+      
+      <Modal
+        isOpen={showModal}
+        onClose={() => setShowModal(false)}
+        title="注册成功"
+        message="账号创建成功，正在跳转到首页..."
+      />
+    </div>
+  );
+};
+
+export default Register;

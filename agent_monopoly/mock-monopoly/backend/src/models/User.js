@@ -1,73 +1,86 @@
 const { db } = require('../db/connection');
 
 class User {
-  static async create(userData) {
-    const { username, email, passwordHash } = userData;
-    const sql = `
-      INSERT INTO users (username, email, password_hash, created_at)
-      VALUES (?, ?, ?, datetime('now'))
-    `;
-    const result = db.prepare(sql).run(username, email, passwordHash);
-    return this.findById(result.lastInsertRowid);
-  }
+    static create(userData) {
+        const { username, email, password_hash } = userData;
+        const sql = `
+            INSERT INTO users (username, email, password_hash, created_at)
+            VALUES (?, ?, ?, strftime('%s', 'now'))
+        `;
+        const result = db.run(sql, [username, email, password_hash]);
+        return this.findById(result.lastID);
+    }
 
-  static async findById(id) {
-    const sql = 'SELECT * FROM users WHERE id = ?';
-    const user = db.prepare(sql).get(id);
-    if (!user) return null;
-    return {
-      id: user.id,
-      username: user.username,
-      email: user.email,
-      createdAt: user.created_at
-    };
-  }
+    static findById(id) {
+        const sql = 'SELECT * FROM users WHERE id = ?';
+        const row = db.get(sql, [id]);
+        if (!row) return null;
+        return this._mapRowToUser(row);
+    }
 
-  static async findByUsername(username) {
-    const sql = 'SELECT * FROM users WHERE username = ?';
-    const user = db.prepare(sql).get(username);
-    if (!user) return null;
-    return {
-      id: user.id,
-      username: user.username,
-      email: user.email,
-      passwordHash: user.password_hash,
-      createdAt: user.created_at
-    };
-  }
+    // 别名 - 路由可能调用
+    static getById(id) {
+        return this.findById(id);
+    }
 
-  static async findByEmail(email) {
-    const sql = 'SELECT * FROM users WHERE email = ?';
-    const user = db.prepare(sql).get(email);
-    if (!user) return null;
-    return {
-      id: user.id,
-      username: user.username,
-      email: user.email,
-      passwordHash: user.password_hash,
-      createdAt: user.created_at
-    };
-  }
+    static findByUsername(username) {
+        const sql = 'SELECT * FROM users WHERE username = ?';
+        const row = db.get(sql, [username]);
+        if (!row) return null;
+        return this._mapRowToUser(row);
+    }
 
-  static async update(id, userData) {
-    const { username, email } = userData;
-    const sql = `
-      UPDATE users 
-      SET username = ?, email = ? 
-      WHERE id = ?
-    `;
-    db.prepare(sql).run(username, email, id);
-    return this.findById(id);
-  }
+    // 别名 - 路由可能调用
+    static getByUsername(username) {
+        return this.findByUsername(username);
+    }
 
-  static async delete(id) {
-    const sql = 'DELETE FROM users WHERE id = ?';
-    db.prepare(sql).run(id);
-    return true;
-  }
+    static findByEmail(email) {
+        const sql = 'SELECT * FROM users WHERE email = ?';
+        const row = db.get(sql, [email]);
+        if (!row) return null;
+        return this._mapRowToUser(row);
+    }
+
+    // 别名 - 路由可能调用
+    static getByEmail(email) {
+        return this.findByEmail(email);
+    }
+
+    static findAll() {
+        const sql = 'SELECT * FROM users ORDER BY created_at DESC';
+        const rows = db.all(sql);
+        return rows.map(row => this._mapRowToUser(row));
+    }
+
+    static update(id, userData) {
+        const { username, email } = userData;
+        const sql = `
+            UPDATE users
+            SET username = COALESCE(?, username),
+                email = COALESCE(?, email)
+            WHERE id = ?
+        `;
+        db.run(sql, [username, email, id]);
+        return this.findById(id);
+    }
+
+    static delete(id) {
+        const sql = 'DELETE FROM users WHERE id = ?';
+        db.run(sql, [id]);
+        return { success: true };
+    }
+
+    // 私有方法：行映射 (snake_case -> camelCase)
+    static _mapRowToUser(row) {
+        return {
+            id: row.id,
+            username: row.username,
+            email: row.email,
+            passwordHash: row.password_hash,
+            createdAt: row.created_at
+        };
+    }
 }
 
 module.exports = User;
-```
-
-```

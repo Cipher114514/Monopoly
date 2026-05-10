@@ -1,0 +1,31 @@
+{
+  "messages": [
+    {
+      "type": "AIMessage",
+      "content": "PRD已生成并保存到 prd.md"
+    }
+  ],
+  "current_agent": "PM Agent",
+  "iteration_count": 0,
+  "prd": {
+    "file_path": "prd.md",
+    "artifact_type": "prd",
+    "updated_at": "2026-05-09T20:03:20.638545",
+    "project_name": "在线大富翁游戏",
+    "size": 3488,
+    "items_count": 9
+  },
+  "tasks": {},
+  "architecture": {},
+  "design": {},
+  "code": {},
+  "review": {},
+  "test_results": {},
+  "qa_report": {},
+  "documentation": {},
+  "memory_context": "",
+  "skill_results": [],
+  "validation_status": [],
+  "project_name": "在线大富翁游戏",
+  "user_requirement": "开发一个在线大富翁游戏，支持2-6人实时对战。核心功能包括：用户注册登录、创建房间、掷骰子移动、购买地产、建设房屋、收取过路费、机会命运卡牌、破产判定等。技术要求：使用React+Node.js+Socket.io+SQLite实现，服务端权威架构。"
+}

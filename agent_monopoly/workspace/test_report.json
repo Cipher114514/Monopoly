@@ -1,0 +1,288 @@
+{
+  "passed": 2,
+  "failed": 3,
+  "bugs": [
+    {
+      "id": "PKG-JSON",
+      "title": "package.json解析失败: Extra data: line 37 column 1 (char 765)",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "DB-003",
+      "title": "数据库文件路径不正确，应该指向 monopoly.db",
+      "severity": "High",
+      "type": "配置"
+    },
+    {
+      "id": "DB-004",
+      "title": "数据库连接未导出，其他模块无法使用",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "FAKE-Card.js-14",
+      "title": "backend\\src\\models\\Card.js:14 可能返回假数据而非数据库查询",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "FAKE-Card.js-37",
+      "title": "backend\\src\\models\\Card.js:37 可能返回假数据而非数据库查询",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "FAKE-Player.js-24",
+      "title": "backend\\src\\models\\Player.js:24 可能返回假数据而非数据库查询",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "FAKE-Player.js-47",
+      "title": "backend\\src\\models\\Player.js:47 可能返回假数据而非数据库查询",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "FAKE-Property.js-19",
+      "title": "backend\\src\\models\\Property.js:19 可能返回假数据而非数据库查询",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "FAKE-Property.js-38",
+      "title": "backend\\src\\models\\Property.js:38 可能返回假数据而非数据库查询",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "FAKE-Property.js-55",
+      "title": "backend\\src\\models\\Property.js:55 可能返回假数据而非数据库查询",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "FAKE-Room.js-29",
+      "title": "backend\\src\\models\\Room.js:29 可能返回假数据而非数据库查询",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "FAKE-Room.js-53",
+      "title": "backend\\src\\models\\Room.js:53 可能返回假数据而非数据库查询",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "FAKE-User.js-18",
+      "title": "backend\\src\\models\\User.js:18 可能返回假数据而非数据库查询",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "FAKE-User.js-30",
+      "title": "backend\\src\\models\\User.js:30 可能返回假数据而非数据库查询",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "FAKE-User.js-43",
+      "title": "backend\\src\\models\\User.js:43 可能返回假数据而非数据库查询",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "FAKE-gameService.js-52",
+      "title": "backend\\src\\services\\gameService.js:52 可能返回假数据而非数据库查询",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "FAKE-roomService.js-78",
+      "title": "backend\\src\\services\\roomService.js:78 可能返回假数据而非数据库查询",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "FAKE-roomService.js-84",
+      "title": "backend\\src\\services\\roomService.js:84 可能返回假数据而非数据库查询",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "FAKE-roomService.js-137",
+      "title": "backend\\src\\services\\roomService.js:137 可能返回假数据而非数据库查询",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "FAKE-roomService.js-198",
+      "title": "backend\\src\\services\\roomService.js:198 可能返回假数据而非数据库查询",
+      "severity": "Critical",
+      "type": "功能"
+    },
+    {
+      "id": "FAKE-roomService.js-227",
+      "title": "backend\\src\\services\\roomService.js:227 可能返回假数据而非数据库查询",
+      "severity": "Critical",
+      "type": "功能"
+    }
+  ],
+  "summary": "2 通过, 3 失败",
+  "details": [
+    {
+      "name": "文件结构检查",
+      "passed": true
+    },
+    {
+      "name": "package.json检查",
+      "passed": false,
+      "bugs": [
+        {
+          "id": "PKG-JSON",
+          "title": "package.json解析失败: Extra data: line 37 column 1 (char 765)",
+          "severity": "Critical",
+          "type": "功能"
+        }
+      ]
+    },
+    {
+      "name": "数据库连接检查",
+      "passed": false,
+      "bugs": [
+        {
+          "id": "DB-003",
+          "title": "数据库文件路径不正确，应该指向 monopoly.db",
+          "severity": "High",
+          "type": "配置"
+        },
+        {
+          "id": "DB-004",
+          "title": "数据库连接未导出，其他模块无法使用",
+          "severity": "Critical",
+          "type": "功能"
+        }
+      ]
+    },
+    {
+      "name": "假数据/内存存储检查",
+      "passed": false,
+      "bugs": [
+        {
+          "id": "FAKE-Card.js-14",
+          "title": "backend\\src\\models\\Card.js:14 可能返回假数据而非数据库查询",
+          "severity": "Critical",
+          "type": "功能"
+        },
+        {
+          "id": "FAKE-Card.js-37",
+          "title": "backend\\src\\models\\Card.js:37 可能返回假数据而非数据库查询",
+          "severity": "Critical",
+          "type": "功能"
+        },
+        {
+          "id": "FAKE-Player.js-24",
+          "title": "backend\\src\\models\\Player.js:24 可能返回假数据而非数据库查询",
+          "severity": "Critical",
+          "type": "功能"
+        },
+        {
+          "id": "FAKE-Player.js-47",
+          "title": "backend\\src\\models\\Player.js:47 可能返回假数据而非数据库查询",
+          "severity": "Critical",
+          "type": "功能"
+        },
+        {
+          "id": "FAKE-Property.js-19",
+          "title": "backend\\src\\models\\Property.js:19 可能返回假数据而非数据库查询",
+          "severity": "Critical",
+          "type": "功能"
+        },
+        {
+          "id": "FAKE-Property.js-38",
+          "title": "backend\\src\\models\\Property.js:38 可能返回假数据而非数据库查询",
+          "severity": "Critical",
+          "type": "功能"
+        },
+        {
+          "id": "FAKE-Property.js-55",
+          "title": "backend\\src\\models\\Property.js:55 可能返回假数据而非数据库查询",
+          "severity": "Critical",
+          "type": "功能"
+        },
+        {
+          "id": "FAKE-Room.js-29",
+          "title": "backend\\src\\models\\Room.js:29 可能返回假数据而非数据库查询",
+          "severity": "Critical",
+          "type": "功能"
+        },
+        {
+          "id": "FAKE-Room.js-53",
+          "title": "backend\\src\\models\\Room.js:53 可能返回假数据而非数据库查询",
+          "severity": "Critical",
+          "type": "功能"
+        },
+        {
+          "id": "FAKE-User.js-18",
+          "title": "backend\\src\\models\\User.js:18 可能返回假数据而非数据库查询",
+          "severity": "Critical",
+          "type": "功能"
+        },
+        {
+          "id": "FAKE-User.js-30",
+          "title": "backend\\src\\models\\User.js:30 可能返回假数据而非数据库查询",
+          "severity": "Critical",
+          "type": "功能"
+        },
+        {
+          "id": "FAKE-User.js-43",
+          "title": "backend\\src\\models\\User.js:43 可能返回假数据而非数据库查询",
+          "severity": "Critical",
+          "type": "功能"
+        },
+        {
+          "id": "FAKE-gameService.js-52",
+          "title": "backend\\src\\services\\gameService.js:52 可能返回假数据而非数据库查询",
+          "severity": "Critical",
+          "type": "功能"
+        },
+        {
+          "id": "FAKE-roomService.js-78",
+          "title": "backend\\src\\services\\roomService.js:78 可能返回假数据而非数据库查询",
+          "severity": "Critical",
+          "type": "功能"
+        },
+        {
+          "id": "FAKE-roomService.js-84",
+          "title": "backend\\src\\services\\roomService.js:84 可能返回假数据而非数据库查询",
+          "severity": "Critical",
+          "type": "功能"
+        },
+        {
+          "id": "FAKE-roomService.js-137",
+          "title": "backend\\src\\services\\roomService.js:137 可能返回假数据而非数据库查询",
+          "severity": "Critical",
+          "type": "功能"
+        },
+        {
+          "id": "FAKE-roomService.js-198",
+          "title": "backend\\src\\services\\roomService.js:198 可能返回假数据而非数据库查询",
+          "severity": "Critical",
+          "type": "功能"
+        },
+        {
+          "id": "FAKE-roomService.js-227",
+          "title": "backend\\src\\services\\roomService.js:227 可能返回假数据而非数据库查询",
+          "severity": "Critical",
+          "type": "功能"
+        }
+      ]
+    },
+    {
+      "name": "游戏逻辑检查",
+      "passed": true
+    }
+  ],
+  "total_tests": 5
+}

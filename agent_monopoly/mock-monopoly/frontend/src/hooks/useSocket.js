@@ -1,77 +1,116 @@
-import { useEffect, useRef, useState } from 'react';
-import io from 'socket.io-client';
-import { useAuth } from './useAuth';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { io } from 'socket.io-client';
+import api from '../api/client';
 
-export const useSocket = () => {
+const SOCKET_URL = process.env.NODE_ENV === 'development' 
+  ? 'http://localhost:3001' 
+  : '';
+
+export function useSocket(user) {
   const [socket, setSocket] = useState(null);
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState(null);
-  const auth = useAuth();
   const socketRef = useRef(null);
 
-  useEffect(() => {
-    // 如果用户已登录，建立socket连接
-    if (auth.user && !socketRef.current) {
-      const newSocket = io(process.env.REACT_APP_SERVER_URL || 'http://localhost:3001', {
+  // 初始化 Socket 连接
+  const connect = useCallback(() => {
+    if (!user || !user.token) {
+      setError('用户未登录或缺少令牌');
+      return;
+    }
+
+    // 如果已有连接，先断开
+    if (socketRef.current) {
+      socketRef.current.disconnect();
+    }
+
+    try {
+      const newSocket = io(SOCKET_URL, {
         auth: {
-          token: localStorage.getItem('token')
-        }
+          token: user.token
+        },
+        transports: ['websocket', 'polling']
       });
 
-      socketRef.current = newSocket;
-
+      // 连接事件
       newSocket.on('connect', () => {
         setConnected(true);
         setError(null);
       });
 
+      // 连接错误
+      newSocket.on('connect_error', (err) => {
+        console.error('Socket连接错误:', err);
+        setError('连接服务器失败');
+        setConnected(false);
+      });
+
+      // 断开连接
       newSocket.on('disconnect', () => {
         setConnected(false);
       });
 
-      newSocket.on('error', (err) => {
-        setError(err.message);
-      });
-
+      socketRef.current = newSocket;
       setSocket(newSocket);
+    } catch (err) {
+      console.error('Socket初始化失败:', err);
+      setError('初始化连接失败');
     }
+  }, [user]);
 
-    // 清理函数
-    return () => {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-        socketRef.current = null;
-        setSocket(null);
-        setConnected(false);
-      }
-    };
-  }, [auth.user]);
+  // 断开连接
+  const disconnect = useCallback(() => {
+    if (socketRef.current) {
+      socketRef.current.disconnect();
+      socketRef.current = null;
+    }
+    setSocket(null);
+    setConnected(false);
+    setError(null);
+  }, []);
 
   // 发送事件
-  const emit = (event, data) => {
+  const emit = useCallback((event, data) => {
     if (socket && connected) {
       socket.emit(event, data);
-    } else {
-      setError('Socket not connected');
+      return true;
     }
-  };
+    console.warn('Socket未连接，无法发送事件:', event);
+    return false;
+  }, [socket, connected]);
 
   // 监听事件
-  const on = (event, callback) => {
+  const on = useCallback((event, callback) => {
     if (socket) {
       socket.on(event, callback);
       return () => {
         socket.off(event, callback);
       };
     }
-  };
+    return () => {};
+  }, [socket]);
 
-  // 移除监听
-  const off = (event, callback) => {
-    if (socket) {
-      socket.off(event, callback);
+  // 自动连接/断开
+  useEffect(() => {
+    if (user && user.token) {
+      connect();
+    } else {
+      disconnect();
     }
-  };
+
+    return () => {
+      disconnect();
+    };
+  }, [user, connect, disconnect]);
+
+  // 清理函数
+  useEffect(() => {
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+    };
+  }, []);
 
   return {
     socket,
@@ -79,7 +118,7 @@ export const useSocket = () => {
     error,
     emit,
     on,
-    off
+    connect,
+    disconnect
   };
-};
-```
+}

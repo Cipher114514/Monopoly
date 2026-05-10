@@ -1,0 +1,53 @@
+{
+  "total_fixes": 7,
+  "applied": 7,
+  "failed": 0,
+  "skipped": 0,
+  "applied_details": [
+    {
+      "file_path": "backend\\src\\models\\Card.js",
+      "original_size": 2251,
+      "new_size": 1265,
+      "change_ratio": "-43.8%"
+    },
+    {
+      "file_path": "backend\\src\\services\\gameService.js",
+      "original_size": 10118,
+      "new_size": 1031,
+      "change_ratio": "-89.8%"
+    },
+    {
+      "file_path": "backend\\src\\db\\connection.js",
+      "original_size": 3278,
+      "new_size": 507,
+      "change_ratio": "-84.5%"
+    },
+    {
+      "file_path": "backend\\src\\services\\gameService.js",
+      "original_size": 1031,
+      "new_size": 2091,
+      "change_ratio": "102.8%"
+    },
+    {
+      "file_path": "backend\\src\\services\\gameService.js",
+      "original_size": 2091,
+      "new_size": 1945,
+      "change_ratio": "-7.0%"
+    },
+    {
+      "file_path": "backend\\src\\db\\connection.js",
+      "original_size": 507,
+      "new_size": 1760,
+      "change_ratio": "247.1%"
+    },
+    {
+      "file_path": "backend\\src\\services\\gameService.js",
+      "original_size": 1945,
+      "new_size": 1510,
+      "change_ratio": "-22.4%"
+    }
+  ],
+  "failed_details": [],
+  "skipped_details": [],
+  "success_rate": "100.0%"
+}

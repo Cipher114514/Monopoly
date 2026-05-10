@@ -6,6 +6,7 @@ Documentation Agent - 技术文档工程师
 """
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from core.context_builder import build_context_for_agent
 from agent_state import AgentState
 
 
@@ -247,7 +248,7 @@ Authorization: Bearer <your_token>
 
 ### 登录获取 Token
 
-\`\`\`http
+```http
 POST /api/auth/login
 Content-Type: application/json
 
@@ -930,29 +931,36 @@ def create_documentation_agent(llm):
         print("📚 Documentation Agent - 技术文档工程师")
         print("="*70)
 
-        prd = state.get("prd", {})
-        architecture = state.get("architecture", {})
-        design = state.get("design", {})
+        # 使用 context_builder 获取完整的项目上下文
+        context = build_context_for_agent(state, "documentation")
+
         code = state.get("code", {})
 
+        # 处理文件数量 - 可能是 int 或 list
+        backend_files = code.get("backend_files", [])
+        if isinstance(backend_files, int):
+            backend_count = backend_files
+        else:
+            backend_count = len(backend_files) if backend_files else 0
+
+        frontend_files = code.get("frontend_files", [])
+        if isinstance(frontend_files, int):
+            frontend_count = frontend_files
+        else:
+            frontend_count = len(frontend_files) if frontend_files else 0
+
         print(f"📚 编写技术文档")
-        print(f"   - 基于PRD: {prd.get('project_name', 'N/A')}")
-        print(f"   - 架构文档: {len(architecture.get('tech_stack', []))} 项技术")
-        print(f"   - 设计文档: {len(design.get('modules', []))} 个模块")
-        print(f"   - 代码文件: {len(code.get('backend_files', [])) + len(code.get('frontend_files', []))} 个")
+        print(f"   - 项目: {state.get('project_name', 'N/A')}")
+        print(f"   - 代码文件: {backend_count + frontend_count} 个")
         print("\n⏳ 正在生成完整的技术文档...")
 
         messages = [
             SystemMessage(content=DOCUMENTATION_AGENT_PROMPT),
-            HumanMessage(content=f"""
-项目名称: {state.get('project_name', '在线大富翁')}
+            HumanMessage(content=f"""{context}
 
-项目信息:
-- 核心功能: {', '.join(prd.get('features', [])[:5])}
-- 技术栈: {', '.join(architecture.get('tech_stack', []))}
-- 系统模块: {', '.join(design.get('modules', []))}
-- 后端文件: {', '.join(code.get('backend_files', []))}
-- 前端文件: {', '.join(code.get('frontend_files', []))}
+## 当前代码状态
+- 后端文件: {backend_count} 个
+- 前端文件: {frontend_count} 个
 
 请生成完整的技术文档，包括：
 1. README.md - 项目说明、快速开始、安装指南
@@ -990,10 +998,20 @@ def create_documentation_agent(llm):
             state["documentation"] = documentation_data
             state["messages"].append(AIMessage(content=documentation_content))
 
+            # 处理 documents - 可能是 int 或 list
+            documents = documentation_data.get('documents', [])
+            if isinstance(documents, int):
+                docs_count = documents
+            else:
+                docs_count = len(documents) if documents else 0
+
             print("✅ 技术文档生成完成！")
-            print(f"   - 文档数量: {len(documentation_data['documents'])} 个")
+            print(f"   - 文档数量: {docs_count} 个")
             print(f"   - 字数统计: {documentation_data['word_count']} 字")
-            print(f"   - 包含文档: {', '.join(documentation_data['documents'])}")
+            if isinstance(documents, list) and documents:
+                print(f"   - 包含文档: {', '.join(documents)}")
+            elif isinstance(documents, str):
+                print(f"   - 包含文档: {documents}")
 
         except Exception as e:
             print(f"❌ 技术文档生成失败: {e}")

@@ -1,291 +1,271 @@
 import { useState, useEffect, useCallback } from 'react';
-import { useSocket } from './useSocket';
-import { useAuth } from './useAuth';
+import api from '../api/client';
 
-export const useGame = () => {
-  const { user } = useAuth();
-  const { socket, connected, emit, on, off } = useSocket();
-  
-  // 游戏状态
+const useGame = (roomId) => {
   const [gameState, setGameState] = useState(null);
-  const [currentRoom, setCurrentRoom] = useState(null);
-  const [players, setPlayers] = useState([]);
-  const [properties, setProperties] = useState([]);
-  const [cards, setCards] = useState([]);
-  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [socket, setSocket] = useState(null);
 
-  // 监听游戏相关事件
+  // 连接Socket
   useEffect(() => {
-    if (!socket) return;
+    if (!roomId) return;
 
-    // 房间更新
-    const handleRoomUpdated = (roomInfo) => {
-      setCurrentRoom(roomInfo);
-    };
-
-    // 玩家移动
-    const handlePlayerMoved = (data) => {
-      setPlayers(prev => prev.map(p => 
-        p.userId === data.userId 
-          ? { ...p, position: data.newPosition } 
-          : p
-      ));
-    };
-
-    // 回合切换
-    const handleTurnChanged = (currentUserId) => {
-      setGameState(prev => ({
-        ...prev,
-        currentTurn: currentUserId
-      }));
-    };
-
-    // 骰子结果
-    const handleDiceRolled = (data) => {
-      setGameState(prev => ({
-        ...prev,
-        lastDiceRoll: data.value,
-        rolling: false
-      }));
-    };
-
-    // 地产购买
-    const handlePropertyPurchased = (data) => {
-      setProperties(prev => prev.map(p => 
-        p.id === data.propertyId 
-          ? { ...p, ownerId: data.ownerId } 
-          : p
-      ));
-    };
-
-    // 房屋建设
-    const handleHouseBuilt = (data) => {
-      setProperties(prev => prev.map(p => 
-        p.id === data.propertyId 
-          ? { ...p, houseCount: data.houseCount } 
-          : p
-      ));
-    };
-
-    // 租金支付
-    const handleRentPaid = (data) => {
-      setPlayers(prev => prev.map(p => {
-        if (p.userId === data.fromUserId) {
-          return { ...p, money: p.money - data.amount };
+    const connectSocket = async () => {
+      try {
+        // 获取用户token
+        const token = localStorage.getItem('token');
+        if (!token) {
+          setError('请先登录');
+          return;
         }
-        if (p.userId === data.toUserId) {
-          return { ...p, money: p.money + data.amount };
-        }
-        return p;
-      }));
-    };
 
-    // 卡牌抽取
-    const handleCardDrawn = (cardInfo) => {
-      setCards(prev => [...prev, cardInfo]);
-    };
+        // 连接Socket
+        const newSocket = new WebSocket(`ws://localhost:3000?token=${token}`);
+        
+        newSocket.onopen = () => {
+          console.log('Socket connected');
+          setSocket(newSocket);
+        };
 
-    // 卡牌效果
-    const handleCardEffect = (effectData) => {
-      // 根据不同效果类型处理
-      switch (effectData.effectType) {
-        case 'move':
-          setPlayers(prev => prev.map(p => 
-            p.userId === user?.id 
-              ? { ...p, position: effectData.position } 
-              : p
-          ));
-          break;
-        case 'money':
-          setPlayers(prev => prev.map(p => 
-            p.userId === user?.id 
-              ? { ...p, money: p.money + effectData.amount } 
-              : p
-          ));
-          break;
-        // 其他效果处理...
+        newSocket.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          handleSocketMessage(data);
+        };
+
+        newSocket.onerror = (err) => {
+          console.error('Socket error:', err);
+          setError('连接失败');
+        };
+
+        newSocket.onclose = () => {
+          console.log('Socket disconnected');
+          setSocket(null);
+        };
+      } catch (err) {
+        console.error('Socket connection error:', err);
+        setError('连接失败');
       }
     };
 
-    // 玩家破产
-    const handlePlayerBankrupted = (data) => {
-      setPlayers(prev => prev.filter(p => p.userId !== data.userId));
-      setGameState(prev => ({
-        ...prev,
-        players: prev.players.filter(p => p.userId !== data.userId)
-      }));
-    };
+    connectSocket();
 
-    // 游戏结束
-    const handleGameEnded = (data) => {
-      setGameState(prev => ({
-        ...prev,
-        gameEnded: true,
-        winner: data.winner
-      }));
-    };
-
-    // 消息接收
-    const handleMessageReceived = (data) => {
-      setMessages(prev => [...prev, data]);
-    };
-
-    // 错误处理
-    const handleError = (err) => {
-      setError(err.message);
-    };
-
-    // 注册事件监听
-    on('room_updated', handleRoomUpdated);
-    on('player_moved', handlePlayerMoved);
-    on('turn_changed', handleTurnChanged);
-    on('dice_rolled', handleDiceRolled);
-    on('property_purchased', handlePropertyPurchased);
-    on('house_built', handleHouseBuilt);
-    on('rent_paid', handleRentPaid);
-    on('card_drawn', handleCardDrawn);
-    on('card_effect', handleCardEffect);
-    on('player_bankrupted', handlePlayerBankrupted);
-    on('game_ended', handleGameEnded);
-    on('message_received', handleMessageReceived);
-    on('error', handleError);
-
-    // 清理函数
     return () => {
-      off('room_updated', handleRoomUpdated);
-      off('player_moved', handlePlayerMoved);
-      off('turn_changed', handleTurnChanged);
-      off('dice_rolled', handleDiceRolled);
-      off('property_purchased', handlePropertyPurchased);
-      off('house_built', handleHouseBuilt);
-      off('rent_paid', handleRentPaid);
-      off('card_drawn', handleCardDrawn);
-      off('card_effect', handleCardEffect);
-      off('player_bankrupted', handlePlayerBankrupted);
-      off('game_ended', handleGameEnded);
-      off('message_received', handleMessageReceived);
-      off('error', handleError);
+      if (socket) {
+        socket.close();
+      }
     };
-  }, [socket, user]);
+  }, [roomId]);
 
-  // 游戏操作函数
-  const rollDice = useCallback(() => {
-    if (!connected || !currentRoom) return;
+  // 处理Socket消息
+  const handleSocketMessage = useCallback((data) => {
+    switch (data.type) {
+      case 'game_state':
+        setGameState(data.payload);
+        break;
+      case 'player_joined':
+        setGameState(prev => ({
+          ...prev,
+          players: data.payload.players
+        }));
+        break;
+      case 'player_ready':
+        setGameState(prev => ({
+          ...prev,
+          players: data.payload.players
+        }));
+        break;
+      case 'game_started':
+        setGameState(data.payload);
+        break;
+      case 'dice_rolled':
+        setGameState(prev => ({
+          ...prev,
+          currentPlayer: data.payload.currentPlayer,
+          dice: data.payload.dice,
+          players: data.payload.players
+        }));
+        break;
+      case 'player_moved':
+        setGameState(prev => ({
+          ...prev,
+          currentPlayer: data.payload.currentPlayer,
+          players: data.payload.players
+        }));
+        break;
+      case 'property_bought':
+        setGameState(prev => ({
+          ...prev,
+          currentPlayer: data.payload.currentPlayer,
+          players: data.payload.players,
+          properties: data.payload.properties
+        }));
+        break;
+      case 'error':
+        setError(data.message);
+        break;
+      default:
+        console.log('Unknown socket message:', data);
+    }
+  }, []);
+
+  // 获取游戏状态
+  const fetchGameState = useCallback(async () => {
+    if (!roomId) return;
     
     setLoading(true);
     setError(null);
-    emit('roll_dice', { roomId: currentRoom.id });
-  }, [connected, currentRoom, emit]);
-
-  const endTurn = useCallback(() => {
-    if (!connected || !currentRoom) return;
     
-    setLoading(true);
-    setError(null);
-    emit('end_turn', { roomId: currentRoom.id });
-  }, [connected, currentRoom, emit]);
+    try {
+      const response = await api.get(`/api/rooms/${roomId}/state`);
+      if (response.code === 200) {
+        setGameState(response.data);
+      } else {
+        setError(response.message || '获取游戏状态失败');
+      }
+    } catch (err) {
+      console.error('Fetch game state error:', err);
+      setError('获取游戏状态失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [roomId]);
 
-  const buyProperty = useCallback((propertyId) => {
-    if (!connected || !currentRoom) return;
+  // 玩家准备/取消准备
+  const toggleReady = useCallback(async () => {
+    if (!roomId) return;
     
-    setLoading(true);
-    setError(null);
-    emit('buy_property', { roomId: currentRoom.id, propertyId });
-  }, [connected, currentRoom, emit]);
-
-  const buildHouse = useCallback((propertyId) => {
-    if (!connected || !currentRoom) return;
-    
-    setLoading(true);
-    setError(null);
-    emit('build_house', { roomId: currentRoom.id, propertyId });
-  }, [connected, currentRoom, emit]);
-
-  const drawCard = useCallback(() => {
-    if (!connected || !currentRoom) return;
-    
-    setLoading(true);
-    setError(null);
-    emit('draw_card', { roomId: currentRoom.id });
-  }, [connected, currentRoom, emit]);
-
-  const declareBankrupt = useCallback(() => {
-    if (!connected || !currentRoom) return;
-    
-    setLoading(true);
-    setError(null);
-    emit('bankrupt', { roomId: currentRoom.id });
-  }, [connected, currentRoom, emit]);
-
-  const sendMessage = useCallback((message) => {
-    if (!connected || !currentRoom) return;
-    
-    setLoading(true);
-    setError(null);
-    emit('send_message', { roomId: currentRoom.id, message });
-  }, [connected, currentRoom, emit]);
+    try {
+      const response = await api.put(`/api/players/ready`, { 
+        roomId, 
+        isReady: !gameState?.currentPlayer?.isReady 
+      });
+      
+      if (response.code === 200) {
+        setGameState(prev => ({
+          ...prev,
+          currentPlayer: response.data
+        }));
+      }
+    } catch (err) {
+      console.error('Toggle ready error:', err);
+      setError('操作失败');
+    }
+  }, [roomId, gameState?.currentPlayer?.isReady]);
 
   // 开始游戏
-  const startGame = useCallback(() => {
-    if (!connected || !currentRoom) return;
+  const startGame = useCallback(async () => {
+    if (!roomId) return;
     
-    setLoading(true);
-    setError(null);
-    emit('start_game', { roomId: currentRoom.id });
-  }, [connected, currentRoom, emit]);
+    try {
+      await api.post(`/api/rooms/${roomId}/start`);
+      fetchGameState();
+    } catch (err) {
+      console.error('Start game error:', err);
+      setError('开始游戏失败');
+    }
+  }, [roomId, fetchGameState]);
 
-  // 准备状态切换
-  const toggleReady = useCallback(() => {
-    if (!connected || !currentRoom) return;
+  // 掷骰子
+  const rollDice = useCallback(async () => {
+    if (!roomId || !socket) return;
     
-    setLoading(true);
-    setError(null);
-    emit('toggle_ready', { roomId: currentRoom.id });
-  }, [connected, currentRoom, emit]);
+    try {
+      socket.send(JSON.stringify({
+        type: 'roll_dice',
+        roomId
+      }));
+    } catch (err) {
+      console.error('Roll dice error:', err);
+      setError('掷骰子失败');
+    }
+  }, [roomId, socket]);
 
-  // 离开房间
-  const leaveRoom = useCallback(() => {
-    if (!connected || !currentRoom) return;
+  // 购买地产
+  const buyProperty = useCallback(async (propertyId) => {
+    if (!roomId || !socket) return;
     
-    setLoading(true);
-    setError(null);
-    emit('leave_room', { roomId: currentRoom.id });
-    setCurrentRoom(null);
-    setPlayers([]);
-    setProperties([]);
-    setCards([]);
-    setMessages([]);
-  }, [connected, currentRoom, emit]);
+    try {
+      socket.send(JSON.stringify({
+        type: 'buy_property',
+        roomId,
+        propertyId
+      }));
+    } catch (err) {
+      console.error('Buy property error:', err);
+      setError('购买地产失败');
+    }
+  }, [roomId, socket]);
+
+  // 结束回合
+  const endTurn = useCallback(async () => {
+    if (!roomId || !socket) return;
+    
+    try {
+      socket.send(JSON.stringify({
+        type: 'end_turn',
+        roomId
+      }));
+    } catch (err) {
+      console.error('End turn error:', err);
+      setError('结束回合失败');
+    }
+  }, [roomId, socket]);
+
+  // 获取地产列表
+  const fetchProperties = useCallback(async () => {
+    if (!roomId) return;
+    
+    try {
+      const response = await api.get(`/api/properties?room_id=${roomId}`);
+      if (response.code === 200) {
+        setGameState(prev => ({
+          ...prev,
+          properties: response.data
+        }));
+      }
+    } catch (err) {
+      console.error('Fetch properties error:', err);
+      setError('获取地产列表失败');
+    }
+  }, [roomId]);
+
+  // 抽卡
+  const drawCard = useCallback(async (cardType) => {
+    if (!roomId || !socket) return;
+    
+    try {
+      socket.send(JSON.stringify({
+        type: 'draw_card',
+        roomId,
+        cardType
+      }));
+    } catch (err) {
+      console.error('Draw card error:', err);
+      setError('抽卡失败');
+    }
+  }, [roomId, socket]);
+
+  // 初始化时获取游戏状态
+  useEffect(() => {
+    if (roomId) {
+      fetchGameState();
+    }
+  }, [roomId, fetchGameState]);
 
   return {
-    // 状态
     gameState,
-    currentRoom,
-    players,
-    properties,
-    cards,
-    messages,
-    error,
     loading,
-    
-    // 操作函数
-    rollDice,
-    endTurn,
-    buyProperty,
-    buildHouse,
-    drawCard,
-    declareBankrupt,
-    sendMessage,
-    startGame,
+    error,
+    fetchGameState,
     toggleReady,
-    leaveRoom,
-    
-    // 辅助函数
-    isMyTurn: gameState?.currentTurn === user?.id,
-    isGameStarted: gameState?.gameStarted,
-    isGameEnded: gameState?.gameEnded
+    startGame,
+    rollDice,
+    buyProperty,
+    endTurn,
+    fetchProperties,
+    drawCard
   };
 };
-```
+
+export default useGame;

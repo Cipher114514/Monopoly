@@ -1,0 +1,213 @@
+/* 游戏棋盘样式 */
+.board-container {
+  position: relative;
+  width: 800px;
+  height: 800px;
+  margin: 0 auto;
+  background-color: #f0f0f0;
+  border: 2px solid #333;
+  border-radius: 8px;
+}
+
+.board-grid {
+  display: grid;
+  grid-template-columns: repeat(11, 1fr);
+  grid-template-rows: repeat(11, 1fr);
+  width: 100%;
+  height: 100%;
+  gap: 2px;
+}
+
+/* 棋盘格子样式 */
+.board-cell {
+  background-color: #fff;
+  border: 1px solid #ddd;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px;
+  position: relative;
+  font-size: 12px;
+}
+
+/* 四角格子 */
+.cell-corner {
+  background-color: #e8e8e8;
+  font-weight: bold;
+  justify-content: center;
+  text-align: center;
+}
+
+/* 普通格子 */
+.cell-normal {
+  background-color: #fff;
+}
+
+/* 特殊格子（如起点、监狱等） */
+.cell-special {
+  background-color: #f0f8ff;
+}
+
+/* 地产格子 */
+.cell-property {
+  background-color: #fff;
+  border-color: #ddd;
+}
+
+/* 地产颜色组 */
+.property-group-purple {
+  background-color: #e6e6fa;
+  border-color: #9370db;
+}
+
+.property-group-blue {
+  background-color: #e0f7fa;
+  border-color: #00bcd4;
+}
+
+.property-group-pink {
+  background-color: #fce4ec;
+  border-color: #e91e63;
+}
+
+.property-group-orange {
+  background-color: #fff3e0;
+  border-color: #ff9800;
+}
+
+.property-group-red {
+  background-color: #ffebee;
+  border-color: #f44336;
+}
+
+.property-group-yellow {
+  background-color: #fffde7;
+  border-color: #fbc02d;
+}
+
+.property-group-green {
+  background-color: #e8f5e9;
+  border-color: #4caf50;
+}
+
+.property-group-darkblue {
+  background-color: #e3f2fd;
+  border-color: #2196f3;
+}
+
+/* 格子内容 */
+.cell-name {
+  font-weight: bold;
+  font-size: 11px;
+  text-align: center;
+  margin-bottom: 2px;
+}
+
+.cell-price {
+  font-size: 10px;
+  color: #666;
+}
+
+.cell-owner {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid #333;
+}
+
+/* 玩家标记 */
+.player-marker {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid #333;
+  font-size: 10px;
+  font-weight: bold;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: white;
+  z-index: 10;
+}
+
+/* 骰子区域 */
+.dice-area {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  gap: 10px;
+  z-index: 20;
+}
+
+.dice {
+  width: 50px;
+  height: 50px;
+  background-color: white;
+  border: 2px solid #333;
+  border-radius: 8px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 24px;
+  font-weight: bold;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+/* 游戏信息面板 */
+.game-info {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background-color: rgba(255, 255, 255, 0.9);
+  padding: 10px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  min-width: 200px;
+}
+
+.current-player {
+  font-weight: bold;
+  color: #333;
+  margin-bottom: 5px;
+}
+
+.game-status {
+  font-size: 14px;
+  color: #666;
+}
+
+/* 响应式设计 */
+@media (max-width: 900px) {
+  .board-container {
+    width: 600px;
+    height: 600px;
+  }
+  
+  .board-cell {
+    font-size: 10px;
+    padding: 2px;
+  }
+  
+  .cell-name {
+    font-size: 9px;
+  }
+  
+  .cell-price {
+    font-size: 8px;
+  }
+}
+
+@media (max-width: 700px) {
+  .board-container {
+    width: 100%;
+    max-width: 500px;
+    height: 500px;
+  }
+}

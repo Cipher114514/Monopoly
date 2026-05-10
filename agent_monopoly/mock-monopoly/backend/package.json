@@ -9,29 +9,25 @@
     "init-db": "node src/db/init.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "socket.io": "^4.7.2",
-    "better-sqlite3": "^8.7.0",
-    "jsonwebtoken": "^9.0.2",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
+    "express": "^4.18.2",
     "express-rate-limit": "^6.10.0",
-    "helmet": "^7.0.0"
+    "jsonwebtoken": "^9.0.2",
+    "sqlite3": "^5.1.6",
+    "socket.io": "^4.7.2"
   },
   "devDependencies": {
-    "nodemon": "^3.0.1",
-    "jest": "^29.6.2",
-    "supertest": "^6.3.3"
+    "nodemon": "^3.0.1"
   },
   "keywords": [
     "monopoly",
     "game",
-    "backend",
     "socket.io",
-    "sqlite"
+    "express",
+    "realtime"
   ],
-  "author": "Monopoly Game Team",
+  "author": "Your Name",
   "license": "MIT"
 }
-```

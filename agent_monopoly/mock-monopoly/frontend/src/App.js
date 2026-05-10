@@ -1,282 +1,244 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from './hooks/useAuth';
-import { useSocket } from './hooks/useSocket';
-import { useGame } from './hooks/useGame';
-import Header from './components/layout/Header';
-import Footer from './components/layout/Footer';
-import LoginPage from './pages/LoginPage';
-import RegisterPage from './pages/RegisterPage';
-import LobbyPage from './pages/LobbyPage';
-import RoomPage from './pages/RoomPage';
-import GamePage from './pages/GamePage';
-import GameOverPage from './pages/GameOverPage';
-import apiClient from './utils/apiClient';
-import './styles/App.css';
+import api from './api/client';
+import LoginPage from './components/LoginPage';
+import RegisterPage from './components/RegisterPage';
+import HomePage from './components/HomePage';
+import RoomListPage from './components/RoomListPage';
+import CreateRoomPage from './components/CreateRoomPage';
+import GameRoomPage from './components/GameRoomPage';
+import { Toaster } from 'react-hot-toast';
 
 function App() {
-  const { user, login, logout, loading } = useAuth();
-  const { socket, connected } = useSocket();
-  const { 
-    gameStatus, 
-    roomInfo, 
-    players, 
-    currentPlayer, 
-    properties, 
-    diceValue, 
-    message,
-    startGame,
-    rollDice,
-    buyProperty,
-    buildHouse,
-    endTurn,
-    drawCard,
-    payRent,
-    updatePlayerPosition,
-    updatePlayerMoney,
-    updatePropertyOwner,
-    updatePropertyHouses,
-    updateGameStatus,
-    updateRoomInfo,
-    updatePlayers,
-    updateCurrentPlayer,
-    updateProperties,
-    updateDiceValue,
-    updateMessage,
-    resetGame
-  } = useGame();
+  const { user, loading, login, logout } = useAuth();
+  const [socket, setSocket] = useState(null);
 
-  // 初始化Socket连接
+  // 初始化 Socket 连接
   useEffect(() => {
-    if (user && !connected) {
-      // Socket连接已在useSocket中处理
+    if (user) {
+      const newSocket = new WebSocket(`ws://localhost:3001?token=${localStorage.getItem('token')}`);
+      setSocket(newSocket);
+      
+      newSocket.onclose = () => {
+        console.log('Socket 连接关闭');
+      };
     }
-  }, [user, connected]);
+    
+    return () => {
+      if (socket) {
+        socket.close();
+      }
+    };
+  }, [user]);
 
-  // 处理Socket事件
+  // 处理 Socket 消息
   useEffect(() => {
     if (!socket) return;
 
-    // 房间事件
-    socket.on('roomUpdated', (data) => {
-      updateRoomInfo(data.room);
-      updatePlayers(data.players);
-    });
-
-    socket.on('playerJoined', (data) => {
-      updatePlayers(data.players);
-      updateMessage(`${data.playerName} 加入了房间`);
-    });
-
-    socket.on('playerLeft', (data) => {
-      updatePlayers(data.players);
-      updateMessage(`${data.playerName} 离开了房间`);
-    });
-
-    socket.on('playerReady', (data) => {
-      updatePlayers(data.players);
-      updateMessage(`${data.playerName} ${data.ready ? '已' : '取消'}准备`);
-    });
-
-    // 游戏事件
-    socket.on('gameStarted', (data) => {
-      updateGameStatus('playing');
-      updateRoomInfo(data.room);
-      updatePlayers(data.players);
-      updateCurrentPlayer(data.currentPlayer);
-      updateMessage('游戏开始！');
-    });
-
-    socket.on('diceRolled', (data) => {
-      updateDiceValue(data.diceValue);
-      updatePlayerPosition(data.playerId, data.newPosition);
-      updateMessage(`${data.playerName} 掷出了 ${data.diceValue} 点`);
-    });
-
-    socket.on('playerMoved', (data) => {
-      updatePlayerPosition(data.playerId, data.newPosition);
-      updateMessage(`${data.playerName} 移动到了位置 ${data.newPosition}`);
-    });
-
-    socket.on('propertyPurchased', (data) => {
-      updatePropertyOwner(data.propertyId, data.playerId);
-      updatePlayerMoney(data.playerId, data.playerMoney);
-      updateMessage(`${data.playerName} 购买了 ${data.propertyName}`);
-    });
-
-    socket.on('rentPaid', (data) => {
-      updatePlayerMoney(data.payerId, data.payerMoney);
-      updatePlayerMoney(data.ownerId, data.ownerMoney);
-      updateMessage(`${data.payerName} 支付 ${data.amount} 租金给 ${data.ownerName}`);
-    });
-
-    socket.on('houseBuilt', (data) => {
-      updatePropertyHouses(data.propertyId, data.houseCount);
-      updatePlayerMoney(data.playerId, data.playerMoney);
-      updateMessage(`${data.playerName} 在 ${data.propertyName} 建造了一座房子`);
-    });
-
-    socket.on('cardDrawn', (data) => {
-      updateMessage(`${data.playerName} 抽到了: ${data.cardDescription}`);
-      // 执行卡牌效果
-      if (data.cardType === 'move') {
-        updatePlayerPosition(data.playerId, data.targetPosition);
-      } else if (data.cardType === 'money') {
-        updatePlayerMoney(data.playerId, data.playerMoney);
+    const handleMessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        console.log('收到 Socket 消息:', data);
+        
+        // 根据消息类型处理不同的游戏事件
+        switch (data.type) {
+          case 'player_joined':
+            // 更新房间玩家列表
+            break;
+          case 'game_started':
+            // 游戏开始状态更新
+            break;
+          case 'dice_rolled':
+            // 更新骰子结果和玩家位置
+            break;
+          case 'player_moved':
+            // 更新玩家位置
+            break;
+          case 'property_bought':
+            // 更新地产状态
+            break;
+          case 'error':
+            // 显示错误消息
+            alert(data.message);
+            break;
+          default:
+            console.log('未知消息类型:', data.type);
+        }
+      } catch (error) {
+        console.error('解析 Socket 消息失败:', error);
       }
-    });
-
-    socket.on('turnEnded', (data) => {
-      updateCurrentPlayer(data.nextPlayerId);
-      updateMessage(`轮到 ${data.nextPlayerName} 的回合`);
-    });
-
-    socket.on('gameOver', (data) => {
-      updateGameStatus('finished');
-      updateMessage(`游戏结束！获胜者是: ${data.winnerName}`);
-    });
-
-    // 清理事件监听器
-    return () => {
-      socket.off('roomUpdated');
-      socket.off('playerJoined');
-      socket.off('playerLeft');
-      socket.off('playerReady');
-      socket.off('gameStarted');
-      socket.off('diceRolled');
-      socket.off('playerMoved');
-      socket.off('propertyPurchased');
-      socket.off('rentPaid');
-      socket.off('houseBuilt');
-      socket.off('cardDrawn');
-      socket.off('turnEnded');
-      socket.off('gameOver');
     };
-  }, [socket, updateGameStatus, updateRoomInfo, updatePlayers, updateCurrentPlayer, 
-      updatePlayerPosition, updatePlayerMoney, updatePropertyOwner, updatePropertyHouses, 
-      updateDiceValue, updateMessage]);
 
-  // 处理游戏操作
-  const handleStartGame = () => {
-    if (roomInfo && roomInfo.players.length >= 2) {
-      startGame();
+    socket.addEventListener('message', handleMessage);
+
+    return () => {
+      socket.removeEventListener('message', handleMessage);
+    };
+  }, [socket]);
+
+  // 发送 Socket 消息
+  const emitSocketMessage = (type, data) => {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type, ...data }));
     } else {
-      updateMessage('至少需要2名玩家才能开始游戏');
+      console.error('Socket 连接未建立或未连接');
     }
   };
 
-  const handleRollDice = () => {
-    if (gameStatus === 'playing' && currentPlayer && currentPlayer.id === user.id) {
-      rollDice();
+  const handleLogin = async (username, password) => {
+    try {
+      await login(username, password);
+      return true;
+    } catch (error) {
+      console.error('登录失败:', error);
+      return false;
     }
   };
 
-  const handleBuyProperty = (propertyId) => {
-    if (gameStatus === 'playing' && currentPlayer && currentPlayer.id === user.id) {
-      buyProperty(propertyId);
+  const handleRegister = async (username, email, password) => {
+    try {
+      await api.register({ username, email, password });
+      return true;
+    } catch (error) {
+      console.error('注册失败:', error);
+      return false;
     }
   };
 
-  const handleBuildHouse = (propertyId) => {
-    if (gameStatus === 'playing' && currentPlayer && currentPlayer.id === user.id) {
-      buildHouse(propertyId);
+  const handleCreateRoom = async (roomData) => {
+    try {
+      const response = await api.createRoom(roomData);
+      return response.data;
+    } catch (error) {
+      console.error('创建房间失败:', error);
+      throw error;
     }
   };
 
-  const handleEndTurn = () => {
-    if (gameStatus === 'playing' && currentPlayer && currentPlayer.id === user.id) {
-      endTurn();
+  const handleJoinRoom = async (roomId) => {
+    try {
+      const response = await api.joinRoom(roomId);
+      return response.data;
+    } catch (error) {
+      console.error('加入房间失败:', error);
+      throw error;
     }
   };
 
-  const handleDrawCard = () => {
-    if (gameStatus === 'playing' && currentPlayer && currentPlayer.id === user.id) {
-      drawCard();
+  const handlePlayerReady = async (roomId, isReady) => {
+    try {
+      await api.playerReady(roomId, isReady);
+      emitSocketMessage('player_ready', { roomId, isReady });
+    } catch (error) {
+      console.error('更新准备状态失败:', error);
+      throw error;
     }
   };
 
-  const handlePayRent = (propertyId) => {
-    if (gameStatus === 'playing' && currentPlayer && currentPlayer.id === user.id) {
-      payRent(propertyId);
+  const handleStartGame = async (roomId) => {
+    try {
+      await api.startGame(roomId);
+      emitSocketMessage('start_game', { roomId });
+    } catch (error) {
+      console.error('开始游戏失败:', error);
+      throw error;
     }
   };
 
-  // 渲染应用
+  const handleRollDice = async (roomId) => {
+    try {
+      const response = await api.rollDice(roomId);
+      emitSocketMessage('roll_dice', { 
+        roomId, 
+        diceValue: response.data.diceValue,
+        newPosition: response.data.newPosition 
+      });
+      return response.data;
+    } catch (error) {
+      console.error('掷骰子失败:', error);
+      throw error;
+    }
+  };
+
+  const handleBuyProperty = async (roomId, propertyId) => {
+    try {
+      await api.buyProperty(roomId, propertyId);
+      emitSocketMessage('buy_property', { roomId, propertyId });
+    } catch (error) {
+      console.error('购买地产失败:', error);
+      throw error;
+    }
+  };
+
   if (loading) {
-    return <div className="loading">加载中...</div>;
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-100">
+        <div className="text-xl">加载中...</div>
+      </div>
+    );
   }
 
   return (
     <Router>
-      <div className="app">
-        <Header user={user} onLogout={logout} />
+      <div className="min-h-screen bg-gray-50">
+        <Toaster position="top-right" />
         
-        <main className="main-content">
-          <Routes>
-            <Route path="/" element={
-              user ? <Navigate to="/lobby" /> : <Navigate to="/login" />
-            } />
-            <Route path="/login" element={
-              user ? <Navigate to="/lobby" /> : <LoginPage onLogin={login} />
-            } />
-            <Route path="/register" element={
-              user ? <Navigate to="/lobby" /> : <RegisterPage onLogin={login} />
-            } />
-            <Route path="/lobby" element={
-              user ? (
-                <LobbyPage 
+        <Routes>
+          {/* 未登录用户只能访问登录/注册页面 */}
+          {!user && (
+            <>
+              <Route path="/login" element={
+                <LoginPage onLogin={handleLogin} />
+              } />
+              <Route path="/register" element={
+                <RegisterPage onRegister={handleRegister} />
+              } />
+              <Route path="/" element={<Navigate to="/login" />} />
+            </>
+          )}
+
+          {/* 已登录用户访问主页和房间相关页面 */}
+          {user && (
+            <>
+              <Route path="/" element={
+                <HomePage 
                   user={user} 
-                  socket={socket}
-                  rooms={roomInfo ? [roomInfo] : []}
-                  onCreateRoom={() => {}}
-                  onJoinRoom={() => {}}
+                  onLogout={logout}
+                  onCreateRoom={handleCreateRoom}
+                  onJoinRoom={handleJoinRoom}
                 />
-              ) : <Navigate to="/login" />
-            } />
-            <Route path="/room/:roomId" element={
-              user ? (
-                <RoomPage 
+              } />
+              <Route path="/rooms" element={
+                <RoomListPage 
                   user={user}
-                  roomInfo={roomInfo}
-                  players={players}
-                  currentPlayer={currentPlayer}
-                  onReady={() => {}}
+                  onJoinRoom={handleJoinRoom}
+                />
+              } />
+              <Route path="/create-room" element={
+                <CreateRoomPage 
+                  user={user}
+                  onCreateRoom={handleCreateRoom}
+                />
+              } />
+              <Route path="/room/:roomId" element={
+                <GameRoomPage 
+                  user={user}
+                  roomId={/* 从路由参数获取 */}
+                  onPlayerReady={handlePlayerReady}
                   onStartGame={handleStartGame}
-                  onLeaveRoom={() => {}}
-                />
-              ) : <Navigate to="/login" />
-            } />
-            <Route path="/game/:roomId" element={
-              user ? (
-                <GamePage 
-                  user={user}
-                  gameStatus={gameStatus}
-                  roomInfo={roomInfo}
-                  players={players}
-                  currentPlayer={currentPlayer}
-                  properties={properties}
-                  diceValue={diceValue}
-                  message={message}
                   onRollDice={handleRollDice}
                   onBuyProperty={handleBuyProperty}
-                  onBuildHouse={handleBuildHouse}
-                  onEndTurn={handleEndTurn}
-                  onDrawCard={handleDrawCard}
-                  onPayRent={handlePayRent}
+                  emitSocketMessage={emitSocketMessage}
                 />
-              ) : <Navigate to="/login" />
-            } />
-            <Route path="/game-over" element={
-              user ? <GameOverPage winner={currentPlayer} onReset={resetGame} /> : <Navigate to="/login" />
-            } />
-          </Routes>
-        </main>
-        
-        <Footer />
+              } />
+              <Route path="*" element={<Navigate to="/" />} />
+            </>
+          )}
+        </Routes>
       </div>
     </Router>
   );
 }
 
 export default App;
-```

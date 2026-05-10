@@ -1,123 +1,107 @@
 const { db } = require('../db/connection');
 
 class Property {
-  static async create(propertyData) {
-    const { name, position, price, rent, color, ownerUserId } = propertyData;
-    const sql = `
-      INSERT INTO properties (name, position, price, rent, color, owner_user_id, houses, hotel, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, 0, 0, datetime('now'))
-    `;
-    const result = db.prepare(sql).run(name, position, price, rent, color, ownerUserId);
-    return this.findById(result.lastInsertRowid);
-  }
-
-  static async findById(id) {
-    const sql = 'SELECT * FROM properties WHERE id = ?';
-    const property = db.prepare(sql).get(id);
-    if (!property) return null;
-    
-    return {
-      id: property.id,
-      name: property.name,
-      position: property.position,
-      price: property.price,
-      rent: property.rent,
-      color: property.color,
-      ownerUserId: property.owner_user_id,
-      houses: property.houses,
-      hotel: property.hotel,
-      createdAt: property.created_at
-    };
-  }
-
-  static async findByPosition(position) {
-    const sql = 'SELECT * FROM properties WHERE position = ?';
-    const property = db.prepare(sql).get(position);
-    if (!property) return null;
-    
-    return {
-      id: property.id,
-      name: property.name,
-      position: property.position,
-      price: property.price,
-      rent: property.rent,
-      color: property.color,
-      ownerUserId: property.owner_user_id,
-      houses: property.houses,
-      hotel: property.hotel,
-      createdAt: property.created_at
-    };
-  }
-
-  static async findAll() {
-    const sql = 'SELECT * FROM properties ORDER BY position';
-    const properties = db.prepare(sql).all();
-    return properties.map(property => ({
-      id: property.id,
-      name: property.name,
-      position: property.position,
-      price: property.price,
-      rent: property.rent,
-      color: property.color,
-      ownerUserId: property.owner_user_id,
-      houses: property.houses,
-      hotel: property.hotel,
-      createdAt: property.created_at
-    }));
-  }
-
-  static async update(id, propertyData) {
-    const { ownerUserId, houses, hotel } = propertyData;
-    const sql = `
-      UPDATE properties 
-      SET owner_user_id = ?, houses = ?, hotel = ? 
-      WHERE id = ?
-    `;
-    db.prepare(sql).run(ownerUserId, houses, hotel, id);
-    return this.findById(id);
-  }
-
-  static async delete(id) {
-    const sql = 'DELETE FROM properties WHERE id = ?';
-    db.prepare(sql).run(id);
-    return true;
-  }
-
-  static async setOwner(id, ownerUserId) {
-    const sql = 'UPDATE properties SET owner_user_id = ? WHERE id = ?';
-    db.prepare(sql).run(ownerUserId, id);
-    return this.findById(id);
-  }
-
-  static async addHouse(id) {
-    const sql = 'UPDATE properties SET houses = houses + 1 WHERE id = ?';
-    db.prepare(sql).run(id);
-    return this.findById(id);
-  }
-
-  static async addHotel(id) {
-    const sql = 'UPDATE properties SET hotel = 1 WHERE id = ?';
-    db.prepare(sql).run(id);
-    return this.findById(id);
-  }
-
-  static async calculateRent(propertyId) {
-    const sql = 'SELECT rent, houses, hotel FROM properties WHERE id = ?';
-    const property = db.prepare(sql).get(propertyId);
-    if (!property) return 0;
-    
-    let rent = property.rent;
-    if (property.houses > 0) {
-      rent = property.rent * Math.pow(2, property.houses);
-    } else if (property.hotel) {
-      rent = property.rent * 5;
+    static create(propertyData) {
+        const { name, position, price, base_rent, color_group, owner_id } = propertyData;
+        const sql = `
+            INSERT INTO properties (name, position, price, base_rent, color_group, owner_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
+        `;
+        const result = db.run(sql, [name, position, price, base_rent, color_group, owner_id]);
+        return this.findById(result.lastID);
     }
-    
-    return rent;
-  }
+
+    static findById(id) {
+        const sql = 'SELECT * FROM properties WHERE id = ?';
+        const row = db.get(sql, [id]);
+        if (!row) return null;
+        return this._mapRowToProperty(row);
+    }
+
+    // 别名 - 路由可能调用
+    static getById(id) {
+        return this.findById(id);
+    }
+
+    static findAll() {
+        const sql = 'SELECT * FROM properties ORDER BY position';
+        const rows = db.all(sql);
+        return rows.map(row => this._mapRowToProperty(row));
+    }
+
+    static findByRoomId(roomId) {
+        const sql = 'SELECT * FROM properties WHERE room_id = ?';
+        const rows = db.all(sql, [roomId]);
+        return rows.map(row => this._mapRowToProperty(row));
+    }
+
+    // 别名 - 路由可能调用
+    static getByRoomId(roomId) {
+        return this.findByRoomId(roomId);
+    }
+
+    static findByOwner(ownerId) {
+        const sql = 'SELECT * FROM properties WHERE owner_id = ?';
+        const rows = db.all(sql, [ownerId]);
+        return rows.map(row => this._mapRowToProperty(row));
+    }
+
+    // 别名 - 路由可能调用
+    static getByOwner(ownerId) {
+        return this.findByOwner(ownerId);
+    }
+
+    static findByPosition(position) {
+        const sql = 'SELECT * FROM properties WHERE position = ?';
+        const row = db.get(sql, [position]);
+        if (!row) return null;
+        return this._mapRowToProperty(row);
+    }
+
+    // 别名 - 路由可能调用
+    static getByPosition(position) {
+        return this.findByPosition(position);
+    }
+
+    static update(id, propertyData) {
+        const { name, position, price, base_rent, color_group, owner_id, house_count, mortgage } = propertyData;
+        const sql = `
+            UPDATE properties
+            SET name = COALESCE(?, name),
+                position = COALESCE(?, position),
+                price = COALESCE(?, price),
+                base_rent = COALESCE(?, base_rent),
+                color_group = COALESCE(?, color_group),
+                owner_id = COALESCE(?, owner_id),
+                house_count = COALESCE(?, house_count),
+                mortgage = COALESCE(?, mortgage)
+            WHERE id = ?
+        `;
+        db.run(sql, [name, position, price, base_rent, color_group, owner_id, house_count, mortgage, id]);
+        return this.findById(id);
+    }
+
+    static delete(id) {
+        const sql = 'DELETE FROM properties WHERE id = ?';
+        db.run(sql, [id]);
+        return { id };
+    }
+
+    // 私有方法：行映射 (snake_case -> camelCase)
+    static _mapRowToProperty(row) {
+        return {
+            id: row.id,
+            name: row.name,
+            position: row.position,
+            price: row.price,
+            baseRent: row.base_rent,
+            colorGroup: row.color_group,
+            ownerId: row.owner_id,
+            houseCount: row.house_count,
+            mortgage: row.mortgage,
+            createdAt: row.created_at
+        };
+    }
 }
 
 module.exports = Property;
-```
-
-```

@@ -1,0 +1,200 @@
+{
+  "messages": [
+    {
+      "type": "AIMessage",
+      "content": "PRD已生成并保存到 prd.md"
+    },
+    {
+      "type": "AIMessage",
+      "content": "任务列表已保存到 tasks.md"
+    },
+    {
+      "type": "AIMessage",
+      "content": "架构设计已保存到 10 个文件，主文档: architecture.md"
+    },
+    {
+      "type": "AIMessage",
+      "content": "代码已生成，共 35 个文件"
+    }
+  ],
+  "current_agent": "Coding Agent",
+  "iteration_count": 0,
+  "prd": {
+    "file_path": "prd.md",
+    "artifact_type": "prd",
+    "updated_at": "2026-05-09T20:03:20.638545",
+    "project_name": "在线大富翁游戏",
+    "size": 3488,
+    "items_count": 9
+  },
+  "tasks": {
+    "file_path": "tasks.md",
+    "artifact_type": "tasks",
+    "updated_at": "2026-05-09T20:04:16.798622",
+    "project_name": "在线大富翁游戏",
+    "size": 4929,
+    "items_count": 28,
+    "p0_count": 15,
+    "p1_count": 7
+  },
+  "architecture": {
+    "file_path": "architecture.md",
+    "artifact_type": "architecture",
+    "updated_at": "2026-05-09T20:41:09.827984",
+    "project_name": "在线大富翁游戏",
+    "size": 29950,
+    "tables_count": 6,
+    "api_count": 1,
+    "modules": {
+      "database": {
+        "file_path": "architecture_db.md",
+        "size": 2773,
+        "tables_count": 6
+      },
+      "structure": {
+        "file_path": "architecture_structure.md",
+        "size": 2783
+      },
+      "socketio": {
+        "file_path": "architecture_socketio.md",
+        "size": 2136
+      },
+      "api_users": {
+        "file_path": "architecture_api_users.md",
+        "size": 2795,
+        "apis_count": 0
+      },
+      "api_rooms": {
+        "file_path": "architecture_api_rooms.md",
+        "size": 3491,
+        "apis_count": 0
+      },
+      "api_players": {
+        "file_path": "architecture_api_players.md",
+        "size": 3142,
+        "apis_count": 0
+      },
+      "api_properties": {
+        "file_path": "architecture_api_properties.md",
+        "size": 3551,
+        "apis_count": 0
+      },
+      "api_cards": {
+        "file_path": "architecture_api_cards.md",
+        "size": 1679,
+        "apis_count": 1
+      },
+      "security": {
+        "file_path": "architecture_security.md",
+        "size": 7600
+      },
+      "overview": {
+        "file_path": "architecture.md",
+        "size": 1111
+      }
+    },
+    "is_modular": true
+  },
+  "design": {},
+  "code": {
+    "file_path": "code_overview.md",
+    "artifact_type": "code",
+    "updated_at": "2026-05-10T00:25:38.860385",
+    "project_name": "在线大富翁游戏",
+    "total_files": 35,
+    "backend_files": 35,
+    "frontend_files": 0,
+    "modules": {
+      "config": [
+        "backend/package.json"
+      ],
+      "database": [
+        "backend/src/db/connection.js"
+      ],
+      "models": [
+        "backend/src/models/User.js",
+        "backend/src/models/Room.js",
+        "backend/src/models/Player.js",
+        "backend/src/models/Property.js",
+        "backend/src/models/Card.js"
+      ],
+      "user_api": [
+        "backend/src/routes/users.js",
+        "backend/src/middleware/auth.js"
+      ],
+      "room_api": [
+        "backend/src/routes/rooms.js",
+        "backend/src/services/roomService.js"
+      ],
+      "player_api": [
+        "backend/src/routes/players.js"
+      ],
+      "property_api": [
+        "backend/src/routes/properties.js"
+      ],
+      "card_api": [
+        "backend/src/routes/cards.js"
+      ],
+      "game_logic": [
+        "backend/src/services/gameService.js"
+      ],
+      "socket": [
+        "backend/src/socket/handler.js"
+      ],
+      "server": [
+        "backend/src/server.js"
+      ],
+      "frontend_config": [
+        "frontend/package.json",
+        "frontend/index.html",
+        "frontend/vite.config.js",
+        "frontend/index.js"
+      ],
+      "frontend_hooks": [
+        "frontend/src/hooks/useAuth.js",
+        "frontend/src/hooks/useSocket.js",
+        "frontend/src/hooks/useGame.js"
+      ],
+      "frontend_utils": [
+        "frontend/src/utils/apiClient.js",
+        "frontend/src/utils/validation.js"
+      ],
+      "frontend_layout": [
+        "frontend/src/components/layout/Header.jsx",
+        "frontend/src/components/layout/Footer.jsx"
+      ],
+      "frontend_auth_pages": [
+        "frontend/src/pages/LoginPage.jsx"
+      ],
+      "frontend_lobby": [
+        "frontend/src/pages/LobbyPage.jsx"
+      ],
+      "frontend_room": [
+        "frontend/src/pages/RoomPage.jsx"
+      ],
+      "frontend_game": [
+        "frontend/src/pages/GamePage.jsx",
+        "frontend/src/pages/GameOverPage.jsx"
+      ],
+      "frontend_app": [
+        "frontend/src/App.js"
+      ],
+      "documentation": [
+        "code_structure.md"
+      ],
+      "overview": [
+        "code_overview.md"
+      ]
+    },
+    "is_modular": true
+  },
+  "review": {},
+  "test_results": {},
+  "qa_report": {},
+  "documentation": {},
+  "memory_context": "",
+  "skill_results": [],
+  "validation_status": [],
+  "project_name": "在线大富翁游戏",
+  "user_requirement": "开发一个在线大富翁游戏，支持2-6人实时对战。核心功能包括：用户注册登录、创建房间、掷骰子移动、购买地产、建设房屋、收取过路费、机会命运卡牌、破产判定等。技术要求：使用React+Node.js+Socket.io+SQLite实现，服务端权威架构。"
+}

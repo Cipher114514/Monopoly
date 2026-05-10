@@ -6,6 +6,7 @@ QA Agent - 现实检验者
 """
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from core.context_builder import build_context_for_agent
 from agent_state import AgentState
 
 
@@ -352,32 +353,50 @@ def create_qa_agent(llm):
         print("✅ QA Agent - 现实检验者")
         print("="*70)
 
+        # 使用 context_builder 获取前序上下文
+        context = build_context_for_agent(state, "qa")
+
         test_results = state.get("test_results", {})
         code = state.get("code", {})
-        prd = state.get("prd", {})
+
+        # 处理文件数量 - 可能是 int 或 list
+        backend_files = code.get("backend_files", [])
+        if isinstance(backend_files, int):
+            backend_count = backend_files
+        else:
+            backend_count = len(backend_files) if backend_files else 0
+
+        frontend_files = code.get("frontend_files", [])
+        if isinstance(frontend_files, int):
+            frontend_count = frontend_files
+        else:
+            frontend_count = len(frontend_files) if frontend_files else 0
+
+        # 处理 bugs - 可能是 int 或 list
+        bugs = test_results.get('bugs', [])
+        if isinstance(bugs, int):
+            bugs_count = bugs
+        else:
+            bugs_count = len(bugs) if bugs else 0
 
         print(f"✅ 质量保证评估")
-        print(f"   - 基于测试结果: {len(test_results.get('bugs', []))} 个Bug")
-        print(f"   - 代码文件: {len(code.get('backend_files', [])) + len(code.get('frontend_files', []))} 个")
+        print(f"   - 基于测试结果: {bugs_count} 个Bug")
+        print(f"   - 代码文件: {backend_count + frontend_count} 个")
         print("\n⏳ 正在进行现实的集成测试...")
 
         messages = [
             SystemMessage(content=QA_AGENT_PROMPT),
-            HumanMessage(content=f"""
-项目: {state.get('project_name', '在线大富翁')}
+            HumanMessage(content=f"""{context}
 
-测试报告摘要:
-- 发现Bug: {len(test_results.get('bugs', []))} 个
+## 当前测试结果
+- 发现Bug: {bugs_count} 个
 - 测试覆盖: {test_results.get('test_coverage', 'N/A')}
 - 质量评分: {test_results.get('quality_score', 'N/A')}
 - 发布建议: {test_results.get('release_recommendation', 'N/A')}
 
-代码文件:
-- 后端: {', '.join(code.get('backend_files', []))}
-- 前端: {', '.join(code.get('frontend_files', []))}
-
-原始需求:
-- 核心功能: {', '.join(prd.get('features', [])[:5])}
+## 代码文件统计
+- 后端: {backend_count} 个
+- 前端: {frontend_count} 个
 
 请进行现实评估：
 1. 交叉验证测试结果与实际代码
@@ -409,10 +428,17 @@ def create_qa_agent(llm):
             state["qa_report"] = qa_data
             state["messages"].append(AIMessage(content=qa_report))
 
+            # 处理 critical_issues - 可能是 int 或 list
+            critical_issues = qa_data.get('critical_issues', [])
+            if isinstance(critical_issues, int):
+                critical_count = critical_issues
+            else:
+                critical_count = len(critical_issues) if critical_issues else 0
+
             print("✅ QA评估完成！")
             print(f"   - 质量评分: {qa_data['overall_score']}")
             print(f"   - 生产就绪: {qa_data['production_ready']}")
-            print(f"   - 关键问题: {len(qa_data['critical_issues'])} 个")
+            print(f"   - 关键问题: {critical_count} 个")
             print(f"   - 需要修订: {qa_data['revision_needed']}")
 
         except Exception as e:

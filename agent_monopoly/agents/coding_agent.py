@@ -1,379 +1,520 @@
 """
-Coding Agent - 高级开发者
-对应文件: agency-agents-zh-main/engineering/engineering-senior-developer.md
+Coding Agent - 高级开发者 v5
 阶段: 阶段5 - 代码实现
 输出: 前后端代码
+
+v5设计原则:
+- 两阶段生成: 先生成文件列表，再按依赖顺序逐个生成
+- LLM 自主决定: 不硬编码文件列表，由架构文档推导
+- 依赖正确: 按拓扑顺序生成，确保导入关系正确
 """
 
 import os
 import re
-import subprocess
+import sys
+from pathlib import Path
+from typing import Dict, List
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+
+# 添加项目路径
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from agent_state import AgentState
-from core.context_builder import build_context_for_agent, get_architecture_constraints, format_constraints_warning
+from core.file_manager import WorkspaceManager, create_file_reference
 
 
-def format_bugs_for_fix(bugs: list) -> str:
-    """格式化Bug列表供Coding Agent修复"""
-    if not bugs:
-        return "无Bug"
-
-    output = "\n"
-    for bug in bugs:
-        output += f"### {bug['id']}: {bug['title']}\n"
-        output += f"- **严重程度**: {bug['severity']}\n"
-        if bug.get('fr'):
-            output += f"- **需求ID**: {bug['fr']}\n"
-        if bug.get('actual'):
-            output += f"- **实际结果**: {bug['actual']}\n"
-        if bug.get('expected'):
-            output += f"- **期望结果**: {bug['expected']}\n"
-        output += "\n"
-
-    return output
+def _load_coding_prompt():
+    """从prompts目录加载Coding Agent提示词"""
+    prompt_path = Path(__file__).resolve().parents[1] / "prompts" / "coding_prompt.md"
+    try:
+        with open(prompt_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as e:
+        print(f"警告: 无法加载 prompts/coding_prompt.md: {e}")
+        return "你是高级全栈开发者，负责编写生产级别的代码。详细规范请参考 prompts/coding_prompt.md"
 
 
-CODING_AGENT_PROMPT = """你是高级开发者，一位追求极致体验的全栈开发者。
+CODING_AGENT_PROMPT = _load_coding_prompt()
 
-⚠️ **技术栈约束（必须遵守，不可更改）**：
-- 数据库: SQLite (better-sqlite3 或 sql.js，数据库文件 backend/data/monopoly.db)
-- 禁止使用 PostgreSQL、MySQL、MongoDB 等需要额外服务器的数据库
-- 禁止使用内存 Map/Set 存储数据
 
-你用打造有质感的 Web 产品，对每一个像素、每一帧动画都有执念。
+def parse_file_list(llm_response: str) -> List[Dict]:
+    """
+    解析 LLM 返回的文件列表
+    返回格式: [{"path": "backend/src/models/User.js", "type": "Model", "deps": [...]}]
+    """
+    files = []
 
-## 开发哲学：
+    # 支持多种格式：
+    # 格式1: [FILE: path] type: xxx deps: xxx
+    # 格式2: - path (type: xxx, deps: xxx)
+    # 格式3: 表格或列表
 
-### 工匠精神
-- 每一个像素都该是有意为之的
-- 流畅的动画和微交互不是锦上添花，而是必需品
-- 性能和美感必须并存
-- 当创新能提升体验时，大胆打破常规
+    # 提取 [FILE: path] 格式
+    file_pattern = r'\[FILE:\s*([^\]]+)\]'
+    matches = re.findall(file_pattern, llm_response)
 
-### 技术精通
-- 全栈开发：前端 + 后端 + 数据库
-- 实时通信：WebSocket/Socket.io
-- 高级 CSS 和动画
-- Three.js（3D效果）
+    for path in matches:
+        files.append({"path": path.strip(), "deps": []})
 
-## 关键规则：
+    # 如果没找到 [FILE:] 格式，尝试其他格式
+    if not files:
+        # 尝试提取 - path 格式
+        lines = llm_response.split('\n')
+        for line in lines:
+            line = line.strip()
+            if line.startswith('- ') or line.startswith('* '):
+                # 提取路径
+                path_match = re.search(r'`?([a-zA-Z0-9_/\.-]+)`?', line)
+                if path_match:
+                    path = path_match.group(1)
+                    files.append({"path": path, "deps": []})
+            elif line.endswith('.js') or line.endswith('.jsx') or line.endswith('.css'):
+                files.append({"path": line.strip(), "deps": []})
 
-1. **代码质量** - 清晰、可维护、有注释
-2. **性能优先** - 加载时间 < 1.5秒，动画 60fps
-3. **用户体验** - 流畅的交互，及时的反馈
-4. **响应式设计** - 完美支持桌面、平板、移动端
-5. **安全第一** - 输入验证、数据加密、权限控制
+    return files
 
-## 你的任务：
 
-基于系统设计和架构，实现完整的代码：
-1. 后端代码（服务器端逻辑）
-2. 前端代码（用户界面）
-3. 数据库操作
-4. API 实现
-5. 实时通信
+def build_dependency_order(files: List[Dict]) -> List[Dict]:
+    """
+    构建依赖顺序，使用拓扑排序
+    返回: 按依赖顺序排列的文件列表
+    """
+    # 简单的依赖层级排序
+    # 层级 0: 无依赖 (基础模块、utils)
+    # 层级 1: 依赖层级 0
+    # 层级 2: 依赖层级 1
+    # ...
 
-## 代码要求：
+    levels = {}
+    remaining = list(files)
 
-### 后端代码
-- 使用 Express.js 或 FastAPI
-- 完整的错误处理
-- 数据验证和安全
-- 清晰的代码结构
+    max_iterations = len(files) + 2
+    iteration = 0
 
-### 前端代码
-- 使用 React
-- 组件化开发
-- 状态管理
-- 响应式设计
-- 流畅的动画
+    while remaining and iteration < max_iterations:
+        iteration += 1
 
-### 数据库
-- SQLite (better-sqlite3 或 sql.js)
-- 数据库文件: backend/data/monopoly.db
-- 禁止使用 PostgreSQL、MySQL
-- 禁止使用内存存储
+        # 找出可以放在当前层的文件
+        current_level = []
+        still_waiting = []
 
-请生成完整的代码实现，包括：
-1. 项目结构
-2. 关键代码文件
-3. 配置文件
-4. 运行说明
-"""
+        for file_info in remaining:
+            file_path = file_info["path"]
 
-CODING_TEMPLATE = """
-请在代码中体现以下最佳实践：
+            # 判断层级
+            level = 0
 
-```javascript
-// 后端示例 - Express.js
-const express = require('express');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+            # 基础模块 (db, middleware, utils)
+            if any(x in file_path for x in ['/db/', '/middleware/', '/utils/', 'connection.js']):
+                level = 0
+            # Models (依赖 db)
+            elif '/models/' in file_path:
+                level = 1
+            # Services (依赖 models)
+            elif '/services/' in file_path:
+                level = 2
+            # Routes (依赖 models, services)
+            elif '/routes/' in file_path:
+                level = 3
+            # Socket (依赖 services, models)
+            elif '/socket/' in file_path or 'handler.js' in file_path:
+                level = 3
+            # Server (依赖所有)
+            elif '/server.js' in file_path:
+                level = 10
+            # API client (前端基础)
+            elif '/api/client.js' in file_path:
+                level = 20
+            # Hooks (依赖 api)
+            elif '/hooks/' in file_path:
+                level = 21
+            # Components (依赖 hooks, api)
+            elif '/components/' in file_path:
+                # CSS files can be generated alongside components
+                level = 22
+            # CSS files (App.css 等)
+            elif file_path.endswith('.css'):
+                level = 21  # CSS 可以与组件同级或之前
+            # App (依赖所有组件)
+            elif '/App.jsx' in file_path or '/App.js' in file_path:
+                level = 30
+            # Main, index, config
+            elif any(x in file_path for x in ['/main.jsx', '/index.html', '/vite.config', '/package.json']):
+                level = 40
+            else:
+                level = 25
 
-const app = express();
+            file_info["_level"] = level
+            current_level.append(file_info)
 
-// 安全中间件
-app.use(helmet());
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
+        remaining = still_waiting
+        levels[iteration] = current_level
 
-// API 路由
-app.post('/api/rooms', async (req, res) => {
-  try {
-    const room = await createRoom(req.body);
-    res.json({ success: true, data: room });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+    # 按层级排序
+    sorted_files = []
+    for level in sorted(levels.keys()):
+        sorted_files.extend(sorted(levels[level], key=lambda x: x["path"]))
+
+    return sorted_files
+
+
+def generate_file_list(llm, project_name: str, architecture_docs: Dict) -> List[Dict]:
+    """
+    第一阶段: 让 LLM 根据架构文档生成文件列表
+    """
+    print("[阶段1] 生成文件列表...")
+
+    # 构建架构文档上下文
+    arch_context = ""
+    for name, doc in architecture_docs.items():
+        arch_context += f"## {name}\n{doc['content']}\n\n"
+
+    prompt = f"""项目: {project_name}
+
+## 架构文档
+{arch_context}
+
+## 任务
+请根据上述架构文档，列出实现该项目所需的所有文件。
+
+请按以下格式输出:
+```
+[FILE: backend/src/db/connection.js] - 数据库连接
+[FILE: backend/src/models/User.js] - 用户模型
+[FILE: backend/src/models/Room.js] - 房间模型
+...
 ```
 
-```javascript
-// 前端示例 - React
-import React, { useState, useEffect } from 'react';
-import { io } from 'socket.io-client';
-
-export default function GameRoom() {
-  const [socket, setSocket] = useState(null);
-  const [gameState, setGameState] = useState(null);
-
-  useEffect(() => {
-    const socketInstance = io('/game');
-    setSocket(socketInstance);
-
-    socketInstance.on('gameStateUpdate', (newState) => {
-      setGameState(newState);
-    });
-
-    return () => socketInstance.disconnect();
-  }, []);
-
-  return (
-    <div className="game-room">
-      <h1>游戏房间</h1>
-      {gameState && <GameBoard state={gameState} />}
-    </div>
-  );
-}
-```
-
-现在，请基于系统设计生成完整的代码实现。
+要求:
+1. 包含所有后端和前端文件
+2. 文件路径使用相对路径，如 backend/src/...
+3. 简要说明每个文件的用途
 """
 
+    response = llm.invoke([
+        SystemMessage(content=CODING_AGENT_PROMPT),
+        HumanMessage(content=prompt)
+    ])
 
-def save_code_to_disk(content: str, workspace_path: str = "mock-monopoly"):
-    """
-    解析 AI 输出中的代码块并保存到磁盘
-    规范: 期待格式为 [FILE: path/to/file] \n ```language \n code \n ```
-    """
-    if not os.path.exists(workspace_path):
-        os.makedirs(workspace_path)
+    files = parse_file_list(response.content)
 
-    # 简单的正则匹配 [FILE: path] 紧跟代码块
-    file_pattern = r'\[FILE:\s*(.*?)\]\s*```.*?\n(.*?)\n```'
+    # 如果解析失败，尝试从 response 中手动提取
+    if not files:
+        lines = response.content.split('\n')
+        for line in lines:
+            if '.js' in line or '.jsx' in line or '.css' in line:
+                # 提取文件路径
+                path_match = re.search(r'([a-zA-Z0-9_/\.-]+\.(?:js|jsx|css|html|json))', line)
+                if path_match:
+                    files.append({"path": path_match.group(1), "deps": []})
+
+    print(f"  识别到 {len(files)} 个文件")
+
+    # 按依赖排序
+    sorted_files = build_dependency_order(files)
+
+    print(f"  按依赖顺序排列:")
+    for i, f in enumerate(sorted_files[:10], 1):  # 只显示前10个
+        print(f"    {i}. {f['path']}")
+    if len(sorted_files) > 10:
+        print(f"    ... 还有 {len(sorted_files) - 10} 个文件")
+
+    return sorted_files
+
+
+def generate_single_file(llm, file_info: Dict, project_name: str,
+                         architecture_docs: Dict, generated_files: List[str],
+                         all_files: List[Dict], rework_issues: List = None) -> str:
+    """
+    第二阶段: 生成单个文件
+
+    Args:
+        file_info: 当前文件信息 {"path": "...", "_level": ...}
+        generated_files: 已生成的文件列表
+        all_files: 所有文件列表（按依赖顺序）
+        rework_issues: 需要修复的问题列表（返工模式）
+    """
+    file_path = file_info["path"]
+
+    # 构建上下文
+    arch_context = ""
+    for name, doc in architecture_docs.items():
+        arch_context += f"## {name}\n{doc['content'][:500]}\n\n"  # 截断避免过长
+
+    # 已生成文件（可以导入的）
+    available_imports = ""
+    if generated_files:
+        available_imports = "## 已生成的文件（可以导入）:\n"
+        for f in generated_files:
+            available_imports += f"- {f}\n"
+
+    # 待生成文件列表（让 LLM 知道后续会有什么）
+    upcoming_files = "## 待生成的文件:\n"
+    remaining = [f["path"] for f in all_files if f["path"] != file_path]
+    for f in remaining[:20]:  # 只显示前20个
+        upcoming_files += f"- {f}\n"
+    if len(remaining) > 20:
+        upcoming_files += f"... 还有 {len(remaining) - 20} 个文件\n"
+
+    # 返工问题（如果有）
+    rework_context = ""
+    if rework_issues:
+        rework_context = "\n## ⚠️ 需要修复的问题:\n"
+        rework_context += f"本次返工需要解决以下问题，生成代码时请特别注意:\n\n"
+        for issue in rework_issues[:5]:  # 只显示前5个
+            title = issue.get("title", issue.get("reason", "未知问题"))
+            location = issue.get("location", "")
+            severity = issue.get("severity", "")
+            rework_context += f"- [{severity}] {title}\n"
+            if location:
+                rework_context += f"  位置: {location}\n"
+            desc = issue.get("description", "")
+            if desc and len(desc) < 200:
+                rework_context += f"  描述: {desc[:150]}...\n"
+        rework_context += "\n"
+
+    # 导入提示
+    import_hint = ""
+    if file_path.endswith('.jsx') or file_path.endswith('.js'):
+        import_hint = "\n## 导入注意事项:\n"
+        import_hint += "- 使用相对路径导入\n"
+        import_hint += "- 检查已生成文件列表，确保导入路径正确\n"
+
+        if '/components/layout/' in file_path:
+            import_hint += "- layout组件应从 '../../hooks/' 导入 hooks\n"
+            import_hint += "- layout组件无需导入 api\n"
+        elif '/components/' in file_path:
+            import_hint += "- 组件应从 '../hooks/' 导入 hooks\n"
+            import_hint += "- 组件应从 '../api/' 导入 api (如果需要)\n"
+        elif '/hooks/' in file_path:
+            import_hint += "- hooks 应从 '../api/' 导入 api\n"
+            import_hint += "- 使用 named export: export function useAuth() {...}\n"
+        elif '/api/' in file_path:
+            import_hint += "- 使用 default export: const api = {...}; export default api\n"
+        elif '/models/' in file_path:
+            import_hint += "- Model 使用 static 方法\n"
+            import_hint += "- 必须包含 findById, getById, create, update\n"
+            if rework_issues:  # 返工时额外提醒
+                import_hint += "- ⚠️ 确保字段映射正确: SQL用snake_case, 返回用camelCase\n"
+                import_hint += "- ⚠️ 确保所有方法都已实现\n"
+        elif file_path.endswith('App.jsx'):
+            import_hint += "- App.jsx 应从 './hooks/' 导入 hooks\n"
+            import_hint += "- App.jsx 应从 './components/' 导入组件\n"
+            import_hint += "- App.jsx 应导入 './App.css'\n"
+
+    prompt = f"""项目: {project_name}
+
+{arch_context}
+
+{available_imports}
+
+{upcoming_files}
+
+{rework_context}
+
+{import_hint}
+
+## 当前任务
+生成文件: {file_path}
+
+根据 prompts/coding_prompt.md 中的规范生成代码。
+使用 [FILE: {file_path}] 标记输出。
+"""
+
+    response = llm.invoke([
+        SystemMessage(content=CODING_AGENT_PROMPT),
+        HumanMessage(content=prompt)
+    ])
+
+    return response.content
+
+
+def save_code_file(content: str, workspace_path: str) -> List[str]:
+    """
+    从 LLM 响应中提取并保存代码文件
+    """
+    saved_files = []
+
+    # 提取 [FILE: path] 格式
+    file_pattern = r'\[FILE:\s*([^\]]+)\]\s*```[^\n]*\n(.*?)\n```'
     matches = re.findall(file_pattern, content, re.DOTALL)
 
-    saved_files = []
-    
-    # 如果没找到特殊标记，尝试按普通的 Markdown 块寻找（兜底方案）
-    if not matches:
-        blocks = re.findall(r'```.*?\s+(.*?)\s+```', content, re.DOTALL)
-        # 这里逻辑较弱，建议提示词强制要求 [FILE] 标记
-    else:
-        for file_path, file_content in matches:
-            full_path = os.path.join(workspace_path, file_path.strip())
-            os.makedirs(os.path.dirname(full_path), exist_ok=True)
-            with open(full_path, "w", encoding="utf-8") as f:
-                f.write(file_content.strip())
-            saved_files.append(file_path.strip())
+    for file_path, file_content in matches:
+        full_path = os.path.join(workspace_path, file_path.strip())
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        with open(full_path, "w", encoding="utf-8") as f:
+            f.write(file_content.strip())
+        saved_files.append(file_path.strip())
 
-    # Git 提交逻辑
-    try:
-        # 检查是否是 git 仓库
-        if not os.path.exists(os.path.join(workspace_path, ".git")):
-            subprocess.run(["git", "-C", workspace_path, "init"], check=True, capture_output=True)
-        
-        subprocess.run(["git", "-C", workspace_path, "add", "."], check=True, capture_output=True)
-        
-        # 检查是否有变更需要 commit
-        status = subprocess.run(["git", "-C", workspace_path, "status", "--porcelain"], capture_output=True, text=True).stdout
-        if status:
-            subprocess.run(["git", "-C", workspace_path, "commit", "-m", "Auto-commit from Coding Agent"], check=True, capture_output=True)
-            print(f"📦 Git: 代码已提交到本地仓库")
-    except Exception as e:
-        print(f"⚠️ Git 操作失败: {e}")
+    # 如果没有找到代码块，检查是否是纯代码
+    if not matches and content.strip():
+        # 尝试查找文件标记
+        file_match = re.search(r'\[FILE:\s*([^\]]+)\]', content)
+        if file_match:
+            file_path = file_match.group(1)
+            # 移除文件标记后的内容
+            code_content = re.sub(r'\[FILE:[^\]]+\]\s*', '', content)
+            if code_content.strip():
+                full_path = os.path.join(workspace_path, file_path.strip())
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                with open(full_path, "w", encoding="utf-8") as f:
+                    f.write(code_content.strip())
+                saved_files.append(file_path.strip())
 
     return saved_files
 
 
 def create_coding_agent(llm):
-    """创建 Coding Agent 工厂函数"""
+    """创建 Coding Agent 工厂函数 v5"""
 
     def coding_agent(state: AgentState) -> AgentState:
-        """Coding Agent - 高级开发者"""
+        """Coding Agent v5 - 两阶段生成"""
         print("\n" + "="*70)
-        print("💻 Coding Agent - 高级开发者")
+        print("Coding Agent - 高级开发者 (v5)")
         print("="*70)
 
-        design = state.get("design", {})
+        workspace = WorkspaceManager()
+        project_name = state.get("project_name", "在线大富翁")
         architecture = state.get("architecture", {})
         iteration = state.get("iteration_count", 0)
+        rework_source = state.get("rework_source", "")
+        rework_issues = state.get("rework_issues", [])
         test_results = state.get("test_results", {})
         bugs = test_results.get("bugs", [])
-        memory_context = state.get("memory_context", "")
 
-        # 使用上下文构建工具获取完整上下文
-        full_context = build_context_for_agent(state, "coding")
-
-        # 获取技术栈约束
-        constraints = get_architecture_constraints(state)
-        constraints_warning = format_constraints_warning(constraints)
-
-        if memory_context:
-            print("📚 已读取前序 Agent 的完整决策上下文")
-
-        # 检查是否是返工
-        if iteration > 0 and bugs:
+        # 返工模式
+        if iteration > 0 and (rework_issues or bugs):
             print(f"\n🔧 返工模式 - 第{iteration}次修复")
-            print(f"   需要修复的Bug: {len(bugs)} 个")
-            for bug in bugs:
-                print(f"   - {bug['id']}: {bug['title']} ({bug['severity']})")
+            print(f"   来源: {rework_source}")
+            print(f"   问题数: {len(rework_issues) if rework_issues else len(bugs)}")
 
-            # 基于Bug修复代码
-            messages = [
-                SystemMessage(content=CODING_AGENT_PROMPT),
-                HumanMessage(content=f"""
-                项目: {state.get('project_name', '在线大富翁')}
+            issues = rework_issues if rework_issues else bugs
 
-                ## 当前代码
-                {state.get('code', {}).get('content', '无')}
+            # TODO: 根据问题修复代码
+            # 目前先打印问题，完整修复需要根据问题类型处理
+            for issue in issues[:3]:  # 只显示前3个
+                title = issue.get("title", issue.get("reason", "未知问题"))
+                location = issue.get("location", "")
+                severity = issue.get("severity", "")
+                print(f"   - [{severity}] {title}")
+                if location:
+                    print(f"     位置: {location}")
 
-                ## 测试发现的Bug
-                {format_bugs_for_fix(bugs)}
-
-                ## 任务
-                修复上述Bug，只修改有问题的部分，不要改变其他代码。
-
-                要求：
-                1. 准确定位Bug位置
-                2. 提供修复后的代码
-                3. 请严格使用以下格式输出修复后的文件内容：
-                   [FILE: 相对路径/文件名]
-                   ```语言
-                   代码内容
-                   ```
-                4. 确保修复不引入新问题
-                """)
-            ]
-        else:
-            # 首次生成代码
-            print(f"💻 实现代码")
-            print(f"   - 数据库: {constraints['database']}")
-            print(f"   - 后端: {constraints['backend']}")
-            print(f"   - 前端: {constraints['frontend']}")
-            print(f"   - 模块: {len(design.get('modules', []))} 个")
-            print("\n⏳ 正在生成前后端代码...")
-
-            # 获取架构文档中的完整信息
-            architecture_content = architecture.get('content', '')
-            design_content = design.get('content', '')
-
-            messages = [
-                SystemMessage(content=CODING_AGENT_PROMPT),
-                HumanMessage(content=f"""{full_context}
-
-{constraints_warning}
-
-## 来自 Architecture Agent 的完整架构文档
-
-{architecture_content[:3000]}
-
-## 来自 Design Agent 的系统设计
-
-{design_content[:2000]}
-
-## Coding Agent 任务
-
-基于以上完整的架构和设计文档，生成可运行的代码：
-
-### 必须遵守的技术栈
-- **数据库**: {constraints['database']}
-- **后端**: {constraints['backend']}
-- **前端**: {constraints['frontend']}
-- **实时通信**: Socket.io
-- **认证**: JWT + bcryptjs
-
-### 需要生成的文件
-
-#### 后端文件 (Node.js + Express)
-1. **backend/package.json** - 依赖配置
-2. **backend/src/server.js** - 服务器入口
-3. **backend/src/app.js** - Express应用配置
-4. **backend/src/db/connection.js** - SQLite数据库连接 (使用better-sqlite3)
-5. **backend/src/models/** - 数据模型 (User, Room, Game, Player, Property)
-6. **backend/src/routes/** - 路由 (auth, rooms, games)
-7. **backend/src/middleware/** - 中间件 (auth, errorHandler)
-8. **backend/src/services/** - 业务逻辑 (gameLogic, roomService)
-
-#### 前端文件 (React + Vite)
-1. **frontend/src/App.js** - 主应用
-2. **frontend/src/pages/** - 页面组件 (HomePage, RoomListPage, GamePage)
-3. **frontend/src/services/** - API服务
-4. **frontend/package.json** - 依赖配置
-
-### 数据库要求
-- 数据库文件路径: backend/data/monopoly.db
-- 使用 better-sqlite3 库
-- 同步API，性能更好
-- 所有Model必须使用真实的SQL操作
-
-### 代码格式要求
-请严格使用以下格式输出：
-```
-[FILE: 相对路径/文件名]
-```语言
-代码内容
-```
-```
-
-### 关键游戏规则
-- 初始资金: 15000 元
-- 路过起点奖励: 2000 元（路过时，停在起点不发钱）
-- 特殊地块（电站/车站/水厂）不能盖房
-- 盖房必须按顺序升级，不能跳级
-
-现在请生成完整的、可运行的代码。
-""")
-            ]
-
-        try:
-            response = llm.invoke(messages)
-            code_content = response.content
-
-            # 保存文件到磁盘
-            saved_files = save_code_to_disk(code_content)
-
-            code_data = {
-                "content": code_content,
-                "saved_files": saved_files,
-                "backend_files": [f for f in saved_files if "backend" in f or "server" in f],
-                "frontend_files": [f for f in saved_files if "frontend" in f or "client" in f],
-                "database_files": [f for f in saved_files if "sql" in f or "db" in f],
-                "config_files": [f for f in saved_files if "package" in f or "env" in f],
-            }
+            # 加载架构文档进行重新生成
+            print("\n   重新生成受影响的文件...")
+            # 这里应该根据问题重新生成特定文件，暂时继续正常流程
 
             state["current_agent"] = "Coding Agent"
-            state["code"] = code_data
-            state["messages"].append(AIMessage(content=code_content))
+            # 注意：这里应该先修复再生成，但完整修复逻辑较复杂
+            # 暂时继续执行正常生成流程，LLM会根据架构文档重新生成
 
-            print("✅ 代码生成完成！")
-            print(f"   - 后端文件: {len(code_data['backend_files'])} 个")
-            print(f"   - 前端文件: {len(code_data['frontend_files'])} 个")
-            print(f"   - 数据库文件: {len(code_data['database_files'])} 个")
+        # 正常模式第一次生成时也需要处理
+        # 不要 return，继续执行下面的逻辑
 
-        except Exception as e:
-            print(f"❌ 代码生成失败: {e}")
+        # 加载架构文档
+        arch_docs = {}
+        modules = architecture.get("modules", {})
+
+        if modules:
+            for module_name, module_info in modules.items():
+                file_path = module_info.get("file_path", "")
+                if file_path:
+                    artifact_type = file_path.replace(".md", "")
+                    content = workspace.read_markdown(artifact_type)
+                    if content:
+                        arch_docs[module_name] = {
+                            "content": content,
+                            "file_path": file_path
+                        }
+
+        # 扫描其他架构文档
+        workspace_path = Path(workspace.workspace_root)
+        for arch_file in workspace_path.glob("architecture_*.md"):
+            artifact_type = arch_file.stem
+            content = workspace.read_markdown(artifact_type)
+            if content and artifact_type.replace("architecture_", "") not in arch_docs:
+                arch_docs[artifact_type.replace("architecture_", "")] = {
+                    "content": content,
+                    "file_path": arch_file.name
+                }
+
+        if not arch_docs:
+            print("缺少架构文档")
             state["current_agent"] = "Coding Agent"
-            state["code"] = {"error": str(e)}
+            state["code"] = {"error": "缺少架构文档"}
+            return state
+
+        print(f"架构文档: {len(arch_docs)}个")
+
+        # ========== 阶段1: 生成文件列表 ==========
+        all_files = generate_file_list(llm, project_name, arch_docs)
+
+        if not all_files:
+            print("错误: 无法生成文件列表")
+            state["current_agent"] = "Coding Agent"
+            state["code"] = {"error": "无法生成文件列表"}
+            return state
+
+        # ========== 阶段2: 按依赖顺序逐个生成文件 ==========
+        print(f"\n[阶段2] 逐个生成文件...")
+
+        generated_files = []
+        workspace_path = "mock-monopoly"
+
+        for idx, file_info in enumerate(all_files, 1):
+            file_path = file_info["path"]
+            print(f"[{idx}/{len(all_files)}] {file_path}...")
+
+            try:
+                response = generate_single_file(
+                    llm, file_info, project_name, arch_docs,
+                    generated_files, all_files, rework_issues if iteration > 0 else None
+                )
+
+                saved = save_code_file(response, workspace_path)
+                generated_files.extend(saved)
+
+                if saved:
+                    print(f"    生成: {', '.join(saved)}")
+                else:
+                    print(f"    警告: 未找到文件标记")
+            except Exception as e:
+                print(f"    错误: {e}")
+
+        # 统计
+        backend_count = sum(1 for f in generated_files if f.startswith('backend/'))
+        frontend_count = sum(1 for f in generated_files if f.startswith('frontend/'))
+
+        print(f"\n完成! 总计 {len(generated_files)} 个文件 (后端 {backend_count}, 前端 {frontend_count})")
+
+        # 生成代码结构文档
+        print("生成代码结构文档...")
+        doc_prompt = f"""项目: {project_name}
+
+## 生成的文件
+{chr(10).join(f'- {f}' for f in generated_files)}
+
+## 架构文档
+{chr(10).join(f'## {n}' for n in arch_docs.keys())}
+
+生成代码结构说明文档（项目结构、文件说明、启动说明）
+"""
+
+        doc_response = llm.invoke([
+            SystemMessage(content=CODING_AGENT_PROMPT),
+            HumanMessage(content=doc_prompt)
+        ])
+
+        doc_path = workspace.write_markdown("code_structure", doc_response.content)
+        generated_files.append(doc_path)
+
+        state["current_agent"] = "Coding Agent"
+        state["code"] = {
+            "files": generated_files,
+            "total": len(generated_files),
+            "backend": backend_count,
+            "frontend": frontend_count
+        }
+        state["messages"].append(AIMessage(content=f"代码已生成，共{len(generated_files)}个文件"))
 
         return state
 

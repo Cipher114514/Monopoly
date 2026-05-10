@@ -1,71 +1,95 @@
-import { useState, useEffect, createContext, useContext } from 'react';
-import axios from 'axios';
+import { useState, useEffect } from 'react';
+import api from '../api/client';
 
-const AuthContext = createContext();
-
-export const useAuth = () => {
+export function useAuth() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // 初始化时检查本地存储的token
+  // 从 localStorage 获取 token 并验证
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      // 验证token有效性
-      axios.get('/api/auth/me', {
-        headers: { Authorization: `Bearer ${token}` }
-      })
-      .then(response => {
-        setUser(response.data);
-      })
-      .catch(err => {
-        localStorage.removeItem('token');
-        setError('Token expired or invalid');
-      })
-      .finally(() => {
+    const loadUser = async () => {
+      const token = localStorage.getItem('token');
+      if (!token) {
         setLoading(false);
-      });
-    } else {
-      setLoading(false);
-    }
+        return;
+      }
+
+      try {
+        api.setToken(token);
+        const response = await api.getMe();
+        if (response.success) {
+          setUser(response.data);
+        } else {
+          localStorage.removeItem('token');
+        }
+      } catch (err) {
+        setError(err.message);
+        localStorage.removeItem('token');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadUser();
   }, []);
 
+  // 登录函数
   const login = async (username, password) => {
     try {
+      setLoading(true);
       setError(null);
-      const response = await axios.post('/api/auth/login', { username, password });
       
-      const { token, userInfo } = response.data;
-      localStorage.setItem('token', token);
-      setUser(userInfo);
-      
-      return { success: true };
+      const response = await api.login(username, password);
+      if (response.success) {
+        const { token, user } = response.data;
+        localStorage.setItem('token', token);
+        api.setToken(token);
+        setUser(user);
+        return { success: true, user };
+      } else {
+        setError(response.message);
+        return { success: false, message: response.message };
+      }
     } catch (err) {
-      setError(err.response?.data?.message || 'Login failed');
-      return { success: false, error: err.response?.data?.message };
+      setError(err.message);
+      return { success: false, message: err.message };
+    } finally {
+      setLoading(false);
     }
   };
 
-  const register = async (username, password) => {
+  // 注册函数
+  const register = async (username, email, password) => {
     try {
+      setLoading(true);
       setError(null);
-      const response = await axios.post('/api/auth/register', { username, password });
       
-      const { token, userInfo } = response.data;
-      localStorage.setItem('token', token);
-      setUser(userInfo);
-      
-      return { success: true };
+      const response = await api.register(username, email, password);
+      if (response.success) {
+        const { token, user } = response.data;
+        localStorage.setItem('token', token);
+        api.setToken(token);
+        setUser(user);
+        return { success: true, user };
+      } else {
+        setError(response.message);
+        return { success: false, message: response.message };
+      }
     } catch (err) {
-      setError(err.response?.data?.message || 'Registration failed');
-      return { success: false, error: err.response?.data?.message };
+      setError(err.message);
+      return { success: false, message: err.message };
+    } finally {
+      setLoading(false);
     }
   };
 
+  // 登出函数
   const logout = () => {
     localStorage.removeItem('token');
+    api.setToken(null);
     setUser(null);
+    setError(null);
   };
 
   return {
@@ -77,17 +101,4 @@ export const useAuth = () => {
     logout,
     isAuthenticated: !!user
   };
-};
-
-export const AuthProvider = ({ children }) => {
-  const auth = useAuth();
-  
-  return (
-    <AuthContext.Provider value={auth}>
-      {children}
-    </AuthContext.Provider>
-  );
-};
-
-export const useAuthContext = () => useContext(AuthContext);
-```
+}

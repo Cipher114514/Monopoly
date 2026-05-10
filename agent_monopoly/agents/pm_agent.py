@@ -1,13 +1,18 @@
 """
 PM Agent - 产品经理
-对应文件: agency-agents-zh-main/product/product-manager.md
 阶段: 阶段1 - 需求分析
-输出: PRD (产品需求文档)
+输出: PRD (产品需求文档) 保存为 workspace/prd.md
 """
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from agent_state import AgentState
+import sys
 from pathlib import Path
+
+# 添加 core 目录到路径
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from core.file_manager import WorkspaceManager, create_file_reference
+from core.context_builder import build_context_for_agent
+from agent_state import AgentState
 
 
 # 尝试从 prompts/pm_prompt.md 加载提示词，若失败则回退到内嵌字符串
@@ -18,7 +23,7 @@ def _load_pm_prompt():
             return f.read()
     except Exception:
         # 回退到内嵌简短提示
-        return """你是产品经理，请基于需求生成完整的 PRD。保证包含问题陈述、目标与指标、用户故事、方案与技术考量。"""
+        return """你是产品经理，请基于需求生成完整的 PRD。注意：这是课程作业项目，只需规划核心功能，避免过度设计。"""
 
 
 PM_AGENT_PROMPT = _load_pm_prompt()
@@ -38,13 +43,13 @@ def create_pm_agent(llm):
     def pm_agent(state: AgentState) -> AgentState:
         """
         PM Agent - 产品经理
-        分析需求，生成 PRD
+        分析需求，生成 PRD 并保存为文件
 
         Args:
             state: 当前状态
 
         Returns:
-            更新后的状态
+            更新后的状态（prd字段包含文件引用）
         """
         print("\n" + "="*70)
         print("🎯 PM Agent - 产品经理")
@@ -67,11 +72,14 @@ def create_pm_agent(llm):
 用户需求:
 {user_requirement}
 
-请基于以上需求，生成完整的 PRD 文档。注意：
-1. 深入分析用户痛点
-2. 定义清晰的成功指标
-3. 提供详细的用户故事和验收标准
-4. 识别技术依赖和风险
+请基于以上需求，按照课程作业项目的实际情况，生成完整的产品需求文档（PRD）。
+
+要求：
+1. 只规划能在短期作业时间内完成的核心功能
+2. 明确区分P0（必须实现）和P1（可选）功能
+3. 说明哪些功能本作业不实现
+4. 考虑代码由Agent自动生成的实际能力
+5. 输出为标准Markdown格式
 """)
         ]
 
@@ -80,73 +88,67 @@ def create_pm_agent(llm):
             response = llm.invoke(messages)
             prd_content = response.content
 
-            # 提取 PRD 的关键信息
-            prd_data = {
-                "project_name": project_name,
-                "content": prd_content,
-                "features": extract_features(prd_content),
-                "success_metrics": extract_metrics(prd_content),
-                "user_stories": extract_user_stories(prd_content),
-                "risks": extract_risks(prd_content),
-            }
+            # 使用 WorkspaceManager 保存 PRD 到文件
+            workspace = WorkspaceManager()
+            file_path = workspace.write_markdown("prd", prd_content)
 
-            # 更新状态
+            # 提取元数据
+            features_count = prd_content.count("| F0") + prd_content.count("| F1") + prd_content.count("| F2")
+            if features_count == 0:
+                # 尝试其他计数方式
+                features_count = prd_content.count("功能") // 5  # 粗略估计
+
+            # 创建文件引用（存入State）
+            prd_ref = create_file_reference(
+                artifact_type="prd",
+                filename=file_path,
+                metadata={
+                    "project_name": project_name,
+                    "size": len(prd_content),
+                    "items_count": features_count,
+                }
+            )
+
+            # 更新状态 - 只存文件引用，不存完整内容
             state["current_agent"] = "PM Agent"
-            state["prd"] = prd_data
-            state["messages"].append(AIMessage(content=prd_content))
+            state["prd"] = prd_ref
+            state["messages"].append(AIMessage(content=f"PRD已生成并保存到 {file_path}"))
 
             print("✅ PRD 生成完成！")
-            print(f"   - 识别功能: {len(prd_data['features'])} 个")
-            print(f"   - 成功指标: {len(prd_data['success_metrics'])} 个")
-            print(f"   - 用户故事: {len(prd_data['user_stories'])} 个")
+            print(f"   - 文件路径: workspace/{file_path}")
+            print(f"   - 内容大小: {len(prd_content)} 字符")
+            print(f"   - 功能数量: {features_count}")
 
         except Exception as e:
             print(f"❌ PRD 生成失败: {e}")
             state["current_agent"] = "PM Agent"
-            state["prd"] = {"error": str(e)}
+            state["prd"] = {
+                "file_path": "",
+                "artifact_type": "prd",
+                "updated_at": "",
+                "error": str(e)
+            }
 
         return state
 
     return pm_agent
 
 
-# 辅助函数：提取 PRD 中的关键信息
-def extract_features(prd_content: str) -> list:
-    """从 PRD 中提取功能列表"""
-    # 简化实现：查找包含 "功能" 或 "Feature" 的行
-    features = []
-    lines = prd_content.split('\n')
-    for line in lines:
-        if '功能' in line or 'feature' in line.lower():
-            features.append(line.strip())
-    return features[:10] if features else ["核心功能未明确定义"]
+# 辅助函数：从文件引用加载PRD内容（供后续Agent使用）
+def load_prd_content(state: AgentState) -> str:
+    """
+    从State中的文件引用加载PRD内容
 
+    Args:
+        state: 当前状态
 
-def extract_metrics(prd_content: str) -> list:
-    """从 PRD 中提取成功指标"""
-    metrics = []
-    lines = prd_content.split('\n')
-    for line in lines:
-        if 'metric' in line.lower() or '指标' in line or '%' in line:
-            metrics.append(line.strip())
-    return metrics[:5] if metrics else ["未定义具体指标"]
+    Returns:
+        PRD内容字符串，如果读取失败返回空字符串
+    """
+    prd_ref = state.get("prd", {})
+    if not prd_ref or "file_path" not in prd_ref:
+        return ""
 
-
-def extract_user_stories(prd_content: str) -> list:
-    """从 PRD 中提取用户故事"""
-    stories = []
-    lines = prd_content.split('\n')
-    for line in lines:
-        if 'story' in line.lower() or '用户故事' in line or '作为' in line:
-            stories.append(line.strip())
-    return stories[:5] if stories else ["未定义用户故事"]
-
-
-def extract_risks(prd_content: str) -> list:
-    """从 PRD 中提取风险"""
-    risks = []
-    lines = prd_content.split('\n')
-    for line in lines:
-        if 'risk' in line.lower() or '风险' in line:
-            risks.append(line.strip())
-    return risks[:5] if risks else ["未识别风险"]
+    workspace = WorkspaceManager()
+    content = workspace.read_markdown("prd")
+    return content if content else ""

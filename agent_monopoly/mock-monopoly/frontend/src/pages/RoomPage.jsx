@@ -1,288 +1,252 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
+import api from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useSocket } from '../hooks/useSocket';
-import apiClient from '../utils/apiClient';
-import { validateRoomId } from '../utils/validation';
+import { useGame } from '../hooks/useGame';
+import Room from '../components/Room';
+import GameBoard from '../components/GameBoard';
+import PlayerInfo from '../components/PlayerInfo';
+import Dice from '../components/Dice';
+import Chat from '../components/Chat';
 
 const RoomPage = () => {
-  const { user } = useAuth();
-  const socket = useSocket();
-  const navigate = useNavigate();
   const { roomId } = useParams();
-  
-  const [roomInfo, setRoomInfo] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [isReady, setIsReady] = useState(false);
-  const [message, setMessage] = useState('');
-  const [messages, setMessages] = useState([]);
+  const navigate = useNavigate();
+  const { user, loading } = useAuth();
+  const { socket, connected } = useSocket(user);
+  const { 
+    room, 
+    players, 
+    properties, 
+    currentPlayer, 
+    gameState, 
+    error,
+    loading: gameLoading,
+    joinRoom,
+    leaveRoom,
+    startGame,
+    rollDice,
+    buyProperty,
+    buildHouse,
+    endTurn,
+    sendMessage
+  } = useGame(roomId);
 
-  // 验证房间ID格式
+  const [isOwner, setIsOwner] = useState(false);
+  const [showGameBoard, setShowGameBoard] = useState(false);
+
   useEffect(() => {
-    if (!validateRoomId(roomId)) {
-      setError('无效的房间ID');
-      setIsLoading(false);
+    if (!user) {
+      navigate('/login');
+      return;
     }
-  }, [roomId]);
+  }, [user, navigate]);
 
-  // 获取房间详情
   useEffect(() => {
-    const fetchRoomDetails = async () => {
-      if (!roomId) return;
-      
-      try {
-        setIsLoading(true);
-        const response = await apiClient.get(`/api/rooms/${roomId}`);
-        if (response.code === 200) {
-          setRoomInfo(response.data);
-          
-          // 检查当前玩家是否已准备
-          const player = response.data.players.find(p => p.userId === user?.id);
-          if (player) {
-            setIsReady(player.isReady);
-          }
-        } else {
-          setError(response.message || '获取房间信息失败');
-        }
-      } catch (err) {
-        setError('获取房间信息失败，请检查网络连接');
-        console.error('获取房间详情错误:', err);
-      } finally {
-        setIsLoading(false);
-      }
-    };
+    if (room && user) {
+      setIsOwner(room.creatorId === user.id);
+    }
+  }, [room, user]);
 
-    fetchRoomDetails();
-  }, [roomId, user?.id]);
-
-  // 监听房间更新
   useEffect(() => {
-    if (!socket || !roomId) return;
+    if (room && room.status === 'playing') {
+      setShowGameBoard(true);
+    }
+  }, [room]);
 
-    const handleRoomUpdated = (data) => {
-      setRoomInfo(data);
-      
-      // 更新当前玩家的准备状态
-      const player = data.players.find(p => p.userId === user?.id);
-      if (player) {
-        setIsReady(player.isReady);
-      }
-    };
-
-    const handlePlayerReadyUpdated = (data) => {
-      if (data.userId === user?.id) {
-        setIsReady(data.isReady);
-      }
-    };
-
-    const handleMessageReceived = (data) => {
-      setMessages(prev => [...prev, {
-        userId: data.userId,
-        username: data.username,
-        message: data.message,
-        timestamp: data.timestamp
-      }]);
-    };
-
-    socket.on('room_updated', handleRoomUpdated);
-    socket.on('player_ready_updated', handlePlayerReadyUpdated);
-    socket.on('message_received', handleMessageReceived);
-
-    return () => {
-      socket.off('room_updated', handleRoomUpdated);
-      socket.off('player_ready_updated', handlePlayerReadyUpdated);
-      socket.off('message_received', handleMessageReceived);
-    };
-  }, [socket, roomId, user?.id]);
-
-  // 加入房间
   const handleJoinRoom = async () => {
-    if (!roomId || !user) return;
-
     try {
-      const response = await apiClient.post('/api/rooms/join', { room_id: roomId });
-      if (response.code === 200) {
-        // 加入成功，Socket.io会自动处理更新
-      } else {
-        setError(response.message || '加入房间失败');
-      }
+      await joinRoom(user.id);
     } catch (err) {
-      setError('加入房间失败，请检查网络连接');
-      console.error('加入房间错误:', err);
+      console.error('Failed to join room:', err);
     }
   };
 
-  // 离开房间
   const handleLeaveRoom = async () => {
-    if (!roomId || !user) return;
-
     try {
-      const response = await apiClient.post('/api/rooms/leave', { room_id: roomId });
-      if (response.code === 200) {
-        navigate('/lobby');
-      } else {
-        setError(response.message || '离开房间失败');
-      }
+      await leaveRoom();
+      navigate('/lobby');
     } catch (err) {
-      setError('离开房间失败，请检查网络连接');
-      console.error('离开房间错误:', err);
+      console.error('Failed to leave room:', err);
     }
   };
 
-  // 切换准备状态
-  const handleToggleReady = () => {
-    if (!socket || !roomId || !user) return;
-
-    socket.emit('toggle_ready', { roomId });
-    setIsReady(!isReady);
+  const handleStartGame = async () => {
+    try {
+      await startGame();
+    } catch (err) {
+      console.error('Failed to start game:', err);
+    }
   };
 
-  // 开始游戏
-  const handleStartGame = () => {
-    if (!socket || !roomId || !user) return;
-
-    socket.emit('start_game', { roomId });
+  const handleRollDice = async () => {
+    try {
+      await rollDice();
+    } catch (err) {
+      console.error('Failed to roll dice:', err);
+    }
   };
 
-  // 发送消息
-  const handleSendMessage = () => {
-    if (!socket || !roomId || !user || !message.trim()) return;
-
-    socket.emit('send_message', { roomId, message: message.trim() });
-    setMessage('');
+  const handleBuyProperty = async (propertyId) => {
+    try {
+      await buyProperty(propertyId);
+    } catch (err) {
+      console.error('Failed to buy property:', err);
+    }
   };
 
-  // 渲染玩家列表
-  const renderPlayers = () => {
-    if (!roomInfo?.players) return null;
+  const handleBuildHouse = async (propertyId) => {
+    try {
+      await buildHouse(propertyId);
+    } catch (err) {
+      console.error('Failed to build house:', err);
+    }
+  };
 
+  const handleEndTurn = async () => {
+    try {
+      await endTurn();
+    } catch (err) {
+      console.error('Failed to end turn:', err);
+    }
+  };
+
+  const handleSendMessage = (message) => {
+    if (message.trim()) {
+      sendMessage(message, user.id, user.username);
+    }
+  };
+
+  if (loading || gameLoading) {
     return (
-      <div className="players-list">
-        <h3>玩家列表 ({roomInfo.players.length}/{roomInfo.maxPlayers})</h3>
-        <div className="players">
-          {roomInfo.players.map((player, index) => (
-            <div 
-              key={player.userId} 
-              className={`player ${player.userId === user?.id ? 'current-player' : ''} ${player.isReady ? 'ready' : ''}`}
-            >
-              <div className="player-avatar">{index + 1}</div>
-              <div className="player-info">
-                <div className="player-name">{player.username}</div>
-                <div className="player-status">
-                  {player.userId === user?.id ? (
-                    <span>{isReady ? '已准备' : '未准备'}</span>
-                  ) : (
-                    <span>{player.isReady ? '已准备' : '未准备'}</span>
-                  )}
-                </div>
-              </div>
-              {player.userId === user?.id && (
-                <button 
-                  className={`ready-button ${isReady ? 'ready' : ''}`}
-                  onClick={handleToggleReady}
-                >
-                  {isReady ? '取消准备' : '准备'}
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
+      <div className="room-loading">
+        <div className="spinner"></div>
+        <p>Loading room...</p>
       </div>
     );
-  };
-
-  // 渲染聊天区域
-  const renderChat = () => {
-    return (
-      <div className="chat-area">
-        <h3>聊天</h3>
-        <div className="messages">
-          {messages.map((msg, index) => (
-            <div key={index} className="message">
-              <span className="message-user">{msg.username}: </span>
-              <span className="message-text">{msg.message}</span>
-              <span className="message-time">{new Date(msg.timestamp).toLocaleTimeString()}</span>
-            </div>
-          ))}
-        </div>
-        <div className="message-input">
-          <input
-            type="text"
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder="输入消息..."
-            onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-          />
-          <button onClick={handleSendMessage}>发送</button>
-        </div>
-      </div>
-    );
-  };
-
-  if (isLoading) {
-    return <div className="loading">加载中...</div>;
   }
 
   if (error) {
     return (
-      <div className="error">
+      <div className="room-error">
+        <h2>Error</h2>
         <p>{error}</p>
-        <button onClick={() => navigate('/lobby')}>返回大厅</button>
+        <button onClick={handleLeaveRoom}>Back to Lobby</button>
       </div>
     );
   }
 
-  if (!roomInfo) {
+  if (!room) {
     return (
-      <div className="error">
-        <p>房间不存在或已关闭</p>
-        <button onClick={() => navigate('/lobby')}>返回大厅</button>
+      <div className="room-not-found">
+        <h2>Room Not Found</h2>
+        <p>The room you're looking for doesn't exist.</p>
+        <button onClick={() => navigate('/lobby')}>Back to Lobby</button>
       </div>
     );
   }
-
-  // 检查用户是否已加入房间
-  const isPlayerInRoom = roomInfo.players.some(p => p.userId === user?.id);
 
   return (
     <div className="room-page">
       <div className="room-header">
-        <h1>{roomInfo.name}</h1>
-        <div className="room-status">
-          <span>状态: {roomInfo.status === 'waiting' ? '等待中' : roomInfo.status === 'playing' ? '游戏中' : '已结束'}</span>
-          <span>玩家: {roomInfo.currentPlayers}/{roomInfo.maxPlayers}</span>
+        <h1>{room.name}</h1>
+        <div className="room-info">
+          <span>Players: {room.currentPlayers}/{room.maxPlayers}</span>
+          <span>Status: {room.status}</span>
+        </div>
+        <div className="room-actions">
+          {!showGameBoard && (
+            <>
+              <button 
+                onClick={handleJoinRoom}
+                disabled={room.currentPlayers >= room.maxPlayers}
+                className={room.currentPlayers >= room.maxPlayers ? 'disabled' : ''}
+              >
+                Join Room
+              </button>
+              {isOwner && room.status === 'waiting' && (
+                <button 
+                  onClick={handleStartGame}
+                  disabled={room.currentPlayers < 2}
+                >
+                  Start Game
+                </button>
+              )}
+              <button onClick={handleLeaveRoom}>Leave Room</button>
+            </>
+          )}
         </div>
       </div>
 
-      <div className="room-content">
-        <div className="room-main">
-          {renderPlayers()}
-          
-          <div className="room-actions">
-            {!isPlayerInRoom ? (
-              <button className="join-button" onClick={handleJoinRoom}>
-                加入房间
-              </button>
-            ) : (
-              <>
-                <button className="leave-button" onClick={handleLeaveRoom}>
-                  离开房间
-                </button>
-                {roomInfo.status === 'waiting' && roomInfo.players.every(p => p.isReady) && (
-                  <button className="start-button" onClick={handleStartGame}>
-                    开始游戏
+      {showGameBoard ? (
+        <div className="game-container">
+          <div className="game-sidebar">
+            <PlayerInfo 
+              players={players} 
+              currentPlayer={currentPlayer}
+              isMyTurn={gameState.currentPlayerId === user.id}
+            />
+            <div className="game-controls">
+              {gameState.currentPlayerId === user.id && (
+                <>
+                  <Dice onRoll={handleRollDice} disabled={gameState.diceRolled} />
+                  <button 
+                    onClick={handleEndTurn}
+                    disabled={!gameState.diceRolled}
+                  >
+                    End Turn
                   </button>
-                )}
-              </>
-            )}
+                </>
+              )}
+            </div>
+            <Chat 
+              messages={gameState.messages || []}
+              onSendMessage={handleSendMessage}
+              disabled={gameState.currentPlayerId !== user.id}
+            />
+          </div>
+          
+          <div className="game-board-container">
+            <GameBoard 
+              properties={properties}
+              players={players}
+              currentPlayer={currentPlayer}
+              onBuyProperty={handleBuyProperty}
+              onBuildHouse={handleBuildHouse}
+            />
           </div>
         </div>
-
-        <div className="room-sidebar">
-          {renderChat()}
+      ) : (
+        <div className="room-lobby">
+          <div className="players-list">
+            <h2>Players in Room</h2>
+            <div className="players">
+              {players.map(player => (
+                <div key={player.id} className="player-item">
+                  <div className="player-avatar" style={{ backgroundColor: player.color }}>
+                    {player.username.charAt(0)}
+                  </div>
+                  <div className="player-info">
+                    <span className="player-name">{player.username}</span>
+                    <span className="player-status">
+                      {player.isReady ? 'Ready' : 'Not Ready'}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          
+          <div className="room-chat">
+            <h2>Chat</h2>
+            <Chat 
+              messages={gameState.messages || []}
+              onSendMessage={handleSendMessage}
+            />
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };
