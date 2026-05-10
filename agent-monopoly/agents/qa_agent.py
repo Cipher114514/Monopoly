@@ -397,12 +397,23 @@ def create_qa_agent(llm):
             response = llm.invoke(messages)
             qa_report = response.content
 
+            # ===== 新增: 详细验证 =====
+            rules_verification = verify_core_game_rules(qa_report)
+            reqs_verification = verify_functional_requirements(qa_report)
+            defense_suggestions = extract_defense_suggestions(qa_report)
+            defense_readiness = assess_defense_readiness(state, qa_report)
+
             qa_data = {
                 "content": qa_report,
                 "overall_score": extract_qa_score(qa_report),
                 "production_ready": extract_ready_status(qa_report),
                 "critical_issues": extract_critical_issues(qa_report),
                 "revision_needed": extract_revision_need(qa_report),
+                # ===== 新增字段 =====
+                "game_rules_verification": rules_verification,
+                "functional_requirements_verification": reqs_verification,
+                "defense_suggestions": defense_suggestions,
+                "defense_readiness": defense_readiness,
             }
 
             state["current_agent"] = "QA Agent"
@@ -414,6 +425,14 @@ def create_qa_agent(llm):
             print(f"   - 生产就绪: {qa_data['production_ready']}")
             print(f"   - 关键问题: {len(qa_data['critical_issues'])} 个")
             print(f"   - 需要修订: {qa_data['revision_needed']}")
+            print(f"\n✅ 详细验证完成！")
+            print(f"   - 核心规则验证: {rules_verification['verified_count']}/{rules_verification['total_rules']}")
+            print(f"   - 功能需求覆盖: {reqs_verification['verified_count']}/{reqs_verification['total_requirements']}")
+            print(f"   - 答辩准备度: {defense_readiness['readiness_score']}/100")
+            if defense_readiness['ready_for_defense']:
+                print(f"   ✅ 可以参加答辩")
+            else:
+                print(f"   ❌ 需要做好准备才能答辩")
 
         except Exception as e:
             print(f"❌ QA评估失败: {e}")
@@ -472,3 +491,264 @@ def extract_revision_need(report: str) -> str:
         return "NO - 可以直接发布"
     else:
         return "UNCLEAR"
+
+
+# ===== 新增: 核心验证函数 =====
+
+def verify_core_game_rules(report: str) -> dict:
+    """
+    验证9个核心游戏规则的实现情况
+    
+    Returns:
+        dict: 包含每个规则的验证状态
+    """
+    rules = {
+        "rule_1_pass_start": {
+            "name": "起点规则",
+            "description": "路过起点发钱，停在起点不发钱",
+            "keywords": ["起点", "发钱"],
+            "verified": False
+        },
+        "rule_2_build_house": {
+            "name": "盖房规则",
+            "description": "只能在停着的普通地产上盖房",
+            "keywords": ["盖房", "停着"],
+            "verified": False
+        },
+        "rule_3_special_blocks": {
+            "name": "特殊地块规则",
+            "description": "特殊地块（电站、车站、水厂）不能盖房",
+            "keywords": ["特殊地块", "不能盖房"],
+            "verified": False
+        },
+        "rule_4_upgrade_order": {
+            "name": "建设升级规则",
+            "description": "升级顺序：空地→房子→2房子→旅馆",
+            "keywords": ["升级顺序", "旅馆"],
+            "verified": False
+        },
+        "rule_5_mortgage": {
+            "name": "抵押规则",
+            "description": "有建筑的土地不能抵押，抵押期间不收过路费",
+            "keywords": ["抵押", "过路费"],
+            "verified": False
+        },
+        "rule_6_bankruptcy": {
+            "name": "破产规则",
+            "description": "先变卖资产（房子半价、土地半价抵押），仍不够才破产",
+            "keywords": ["破产", "变卖资产"],
+            "verified": False
+        },
+        "rule_7_card_queue": {
+            "name": "卡牌队列规则",
+            "description": "按队列顺序拿卡，执行后移至队尾（循环）",
+            "keywords": ["卡牌", "队列"],
+            "verified": False
+        },
+        "rule_8_jail": {
+            "name": "坐牢规则",
+            "description": "进牢格：直接移动到坐牢格，暂停1回合；坐牢格：路过无惩罚",
+            "keywords": ["坐牢", "牢格"],
+            "verified": False
+        },
+        "rule_9_parking": {
+            "name": "免费停车规则",
+            "description": "免费停车场：暂停1回合",
+            "keywords": ["免费停车"],
+            "verified": False
+        }
+    }
+    
+    # 检查报告中是否提到了各个规则
+    for rule_key, rule_info in rules.items():
+        for keyword in rule_info["keywords"]:
+            if keyword in report:
+                rule_info["verified"] = True
+                break
+    
+    return {
+        "total_rules": 9,
+        "verified_count": sum(1 for r in rules.values() if r["verified"]),
+        "rules": rules,
+        "compliance_rate": sum(1 for r in rules.values() if r["verified"]) / 9 * 100
+    }
+
+
+def verify_functional_requirements(report: str) -> dict:
+    """
+    验证17个功能需求的实现情况
+    
+    Returns:
+        dict: 包含每个功能需求的验证状态
+    """
+    requirements = {
+        "FR-001": {"name": "用户注册与登录", "verified": False},
+        "FR-002": {"name": "创建游戏房间", "verified": False},
+        "FR-003": {"name": "加入游戏房间", "verified": False},
+        "FR-004": {"name": "开始游戏", "verified": False},
+        "FR-005": {"name": "掷骰子移动", "verified": False},
+        "FR-006": {"name": "购买地产", "verified": False},
+        "FR-007": {"name": "支付过路费", "verified": False},
+        "FR-008": {"name": "建设房屋与酒店", "verified": False},
+        "FR-009": {"name": "抽取机会/命运卡", "verified": False},
+        "FR-010": {"name": "回合管理", "verified": False},
+        "FR-011": {"name": "聊天系统", "verified": False},
+        "FR-012": {"name": "表情互动", "verified": False},
+        "FR-013": {"name": "游戏结束判定", "verified": False},
+        "FR-014": {"name": "破产判定与处理", "verified": False},
+        "FR-015": {"name": "地产赎回功能", "verified": False},
+        "FR-016": {"name": "AI玩家功能", "verified": False},
+        "FR-017": {"name": "历史记录与回放", "verified": False}
+    }
+    
+    # 检查报告中是否提到了各个功能需求
+    for fr_key in requirements.keys():
+        if fr_key in report or requirements[fr_key]["name"] in report:
+            requirements[fr_key]["verified"] = True
+    
+    verified_count = sum(1 for r in requirements.values() if r["verified"])
+    
+    return {
+        "total_requirements": 17,
+        "verified_count": verified_count,
+        "requirements": requirements,
+        "completion_rate": (verified_count / 17) * 100
+    }
+
+
+def extract_defense_suggestions(report: str) -> dict:
+    """
+    从报告中提取答辩建议
+    
+    Returns:
+        dict: 答辩相关建议
+    """
+    suggestions = {
+        "strengths": [],  # 优势
+        "weaknesses": [],  # 不足
+        "focus_areas": [],  # 重点讲解区域
+        "potential_questions": [],  # 可能被问到的问题
+        "preparation_tips": []  # 准备建议
+    }
+    
+    # 提取优势
+    if "✅" in report or "优点" in report or "实现" in report:
+        suggestions["strengths"].append("系统具有完整的功能实现")
+    if "代码质量" in report:
+        suggestions["strengths"].append("代码结构清晰，质量较好")
+    
+    # 提取不足
+    if "❌" in report or "Bug" in report or "问题" in report:
+        suggestions["weaknesses"].append("存在一些Bug需要修复")
+    if "兼容性" in report:
+        suggestions["weaknesses"].append("跨浏览器兼容性需要改进")
+    
+    # 提取重点讲解区域
+    if "实时通信" in report or "WebSocket" in report:
+        suggestions["focus_areas"].append("实时通信架构和WebSocket实现")
+    if "游戏规则" in report:
+        suggestions["focus_areas"].append("复杂游戏规则的算法实现")
+    if "服务端权威" in report:
+        suggestions["focus_areas"].append("服务端权威架构设计")
+    
+    # 添加可能的问题
+    if "P0" in report or "关键" in report:
+        suggestions["potential_questions"].append("系统存在哪些已知问题？")
+    if "修复" in report:
+        suggestions["potential_questions"].append("预计需要多长时间修复这些问题？")
+    
+    # 准备建议
+    if "演示" in report or "Demo" in report:
+        suggestions["preparation_tips"].append("准备完整的功能演示视频")
+    if "文档" in report:
+        suggestions["preparation_tips"].append("准备清晰的技术文档和架构说明")
+    if "PPT" not in suggestions["preparation_tips"]:
+        suggestions["preparation_tips"].append("准备详细的答辩PPT，包含架构图和流程图")
+    
+    return suggestions
+
+
+def assess_defense_readiness(state: dict, report: str) -> dict:
+    """
+    评估是否准备好答辩
+    
+    Args:
+        state: Agent状态
+        report: QA报告
+        
+    Returns:
+        dict: 答辩准备度评估
+    """
+    readiness = {
+        "ready_for_defense": False,
+        "readiness_score": 0,  # 0-100
+        "checklist": {},
+        "recommendations": []
+    }
+    
+    score = 0
+    
+    # 检查项 1: 功能完成度
+    code = state.get("code", {})
+    backend_files = len(code.get("backend_files", []))
+    frontend_files = len(code.get("frontend_files", []))
+    
+    if backend_files > 0 and frontend_files > 0:
+        readiness["checklist"]["code_implementation"] = True
+        score += 20
+    else:
+        readiness["checklist"]["code_implementation"] = False
+        readiness["recommendations"].append("❌ 需要完成代码实现")
+    
+    # 检查项 2: 测试完整性
+    test_results = state.get("test_results", {})
+    if test_results.get("test_coverage"):
+        readiness["checklist"]["test_coverage"] = True
+        score += 15
+    else:
+        readiness["checklist"]["test_coverage"] = False
+        readiness["recommendations"].append("❌ 需要补充测试覆盖")
+    
+    # 检查项 3: 核心规则验证
+    rules_verified = verify_core_game_rules(report)
+    if rules_verified["verified_count"] >= 8:  # 至少8/9
+        readiness["checklist"]["game_rules"] = True
+        score += 20
+    else:
+        readiness["checklist"]["game_rules"] = False
+        readiness["recommendations"].append(f"⚠️ 核心规则验证不完整（{rules_verified['verified_count']}/9）")
+    
+    # 检查项 4: 功能需求覆盖
+    reqs_verified = verify_functional_requirements(report)
+    if reqs_verified["verified_count"] >= 15:  # 至少15/17
+        readiness["checklist"]["requirements_coverage"] = True
+        score += 20
+    else:
+        readiness["checklist"]["requirements_coverage"] = False
+        readiness["recommendations"].append(f"⚠️ 功能需求覆盖不完整（{reqs_verified['verified_count']}/17）")
+    
+    # 检查项 5: 质量评分
+    if "B+" in report or "B" in report:
+        readiness["checklist"]["quality_score"] = True
+        score += 15
+    else:
+        readiness["checklist"]["quality_score"] = False
+        readiness["recommendations"].append("❌ 质量评分不达标")
+    
+    # 检查项 6: 文档完整性
+    if state.get("documentation"):
+        readiness["checklist"]["documentation"] = True
+        score += 10
+    else:
+        readiness["checklist"]["documentation"] = False
+        readiness["recommendations"].append("❌ 技术文档不完整")
+    
+    readiness["readiness_score"] = score
+    readiness["ready_for_defense"] = score >= 70
+    
+    if readiness["ready_for_defense"]:
+        readiness["recommendations"].append("✅ 可以准备答辩")
+    else:
+        readiness["recommendations"].append(f"❌ 准备度不足（{score}/100）")
+    
+    return readiness

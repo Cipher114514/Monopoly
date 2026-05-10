@@ -14,7 +14,7 @@ if sys.platform == 'win32':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 # 配置智谱 API key
-API_KEY = "5a89d580eb0b4553b7f1c6f822352f01.mdOB3HRfcI8Xqhze"
+API_KEY = "7e9c9034821a4885b14bdc2855197ab1.6RRvo6vf2VdB2K1N"
 API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
 def test_single_agent(agent_file: str, user_query: str):
